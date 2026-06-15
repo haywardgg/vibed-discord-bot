@@ -1,0 +1,36 @@
+# Environment / secrets
+.env
+.mempalace
+spawn/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Music folder — prevent audio files from being committed
+music/*
+!music/.gitkeep
+
+# SQLite ratings database
+ratings.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+/tmp/
+# spawn:start
+spawn/.metadata/temp/**
+**/.mempalace/chroma/
+**/.mempalace/palace/
+# spawn:end
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json

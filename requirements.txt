@@ -1,0 +1,65 @@
+# ============================================================================
+# Discord Radio Bot — Python Dependencies
+# ============================================================================
+# Install with:  pip install -r requirements.txt
+#
+# IMPORTANT: You also need ffmpeg installed on your SYSTEM (not via pip).
+# See the install instructions below.
+# ============================================================================
+
+# Discord API wrapper with voice support.
+# The [voice] extra pulls in PyNaCl (libsodium bindings) which is required
+# for encrypted voice communication.
+discord.py[voice]>=2.3.0
+
+# Loads environment variables from a .env file into os.environ.
+# Keeps your bot token and configuration out of source control.
+python-dotenv>=1.0.0
+
+# Reads metadata (artist, title, album, duration, album art) from audio files.
+# Supports MP3, FLAC, MP4/AAC, Ogg Vorbis, and many more.
+mutagen>=1.47.0
+
+
+# ============================================================================
+# System Dependency: ffmpeg
+# ============================================================================
+#
+# ffmpeg is NOT a Python package — it's a standalone program that discord.py
+# uses under the hood to encode and stream audio to Discord.
+#
+# ---- Linux (Debian / Ubuntu / Raspberry Pi OS) ----
+# $ sudo apt update && sudo apt install ffmpeg -y
+#
+# ---- macOS (Homebrew) ----
+# $ brew install ffmpeg
+#
+# ---- Windows ----
+# Option A — winget (Windows 10/11):
+#   winget install ffmpeg
+# Option B — Manual download:
+#   1. Go to https://ffmpeg.org/download.html
+#   2. Download the Windows build
+#   3. Add the ffmpeg\bin folder to your system PATH
+#   4. Restart your terminal
+#
+# ---- Verify ffmpeg is working ----
+# $ ffmpeg -version
+# You should see version info (e.g. "ffmpeg version 6.1").
+# If you get "command not found", ffmpeg is not installed or not on your PATH.
+
+
+# ============================================================================
+# Troubleshooting common install problems
+# ============================================================================
+#
+# "PyNaCl" / "libsodium" errors:
+#   → Run:  pip install --upgrade discord.py[voice]
+#   → On Linux, you may also need: sudo apt install libsodium23
+#
+# Permission errors on Linux:
+#   → Do NOT use sudo pip install. Use your virtual environment instead.
+#
+# "Module not found: aiohttp" or similar:
+#   → Make sure your virtual environment is activated.
+#   → Run: pip install -r requirements.txt --upgrade
