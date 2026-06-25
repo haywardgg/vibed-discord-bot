@@ -227,7 +227,8 @@ class RatingsDB:
 
     # -------------------------------------------------------------------
     # get_all_tracks_stats() — ensures every known track has a ratings
-    # row, then fetches all of them sorted alphabetically by path.
+    # row, then fetches all of them in the caller's order (used by
+    # STATS to show the current shuffle order).
     # -------------------------------------------------------------------
     def get_all_tracks_stats(
         self, all_track_paths: list[str],
@@ -243,11 +244,13 @@ class RatingsDB:
         placeholders = ",".join("?" for _ in all_track_paths)
         rows = self._conn.execute(
             f"SELECT track_path, up_count, down_count, play_count "
-            f"FROM ratings WHERE track_path IN ({placeholders}) "
-            f"ORDER BY track_path ASC",
+            f"FROM ratings WHERE track_path IN ({placeholders})",
             all_track_paths,
         ).fetchall()
-        return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+        # Preserve caller order (e.g. shuffle order from get_all_music_files)
+        stats_map = {r[0]: (r[0], r[1], r[2], r[3]) for r in rows}
+        return [stats_map[path] for path in all_track_paths if path in stats_map]
 
     # -------------------------------------------------------------------
     # get_voters() — loads the in-memory up/down sets for the current track.
