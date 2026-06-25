@@ -2,6 +2,7 @@
 .env
 .mempalace
 spawn/
+.clinerules
 
 # Python
 __pycache__/
