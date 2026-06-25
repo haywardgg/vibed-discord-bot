@@ -2104,9 +2104,10 @@ async def resume_radio(ctx: commands.Context) -> None:
 @bot.command(name=config.COMMAND_FOLDERS)
 async def list_folders(ctx: commands.Context) -> None:
     """List all configured music folders and show the currently active one."""
-    # Schedule the user's command message for deletion
-    if isinstance(ctx.channel, discord.TextChannel):
-        radio._schedule_msg_delete(ctx.message)
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
 
     if not can_switch_folder(ctx.author):
         await ctx.send(
@@ -2144,9 +2145,10 @@ async def list_folders(ctx: commands.Context) -> None:
 @bot.command(name=config.COMMAND_SWITCH)
 async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -> None:
     """Switch to a different music folder. Provide the folder display name."""
-    # Schedule the user's command message for deletion
-    if isinstance(ctx.channel, discord.TextChannel):
-        radio._schedule_msg_delete(ctx.message)
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
 
     if not can_switch_folder(ctx.author):
         await ctx.send(
