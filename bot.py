@@ -1314,11 +1314,6 @@ class RadioManager:
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass
 
-    @staticmethod
-    def _schedule_msg_delete(msg: discord.Message) -> None:
-        """Schedule *msg* for deferred deletion after AUTO_DELETE_TIMEOUT seconds."""
-        asyncio.create_task(RadioManager._delete_after(msg, config.AUTO_DELETE_TIMEOUT))
-
     # ===================================================================
     # PLAYBACK CORE
     # ===================================================================

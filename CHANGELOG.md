@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-folder music selection** — Bot owners can now configure multiple music folders (e.g. Rock, Lofi, Classical) with custom display names in `.env` via `MUSIC_FOLDERS_JSON`. Users or admins can switch between them with the new `!folders` and `!switch` commands. Permission is controlled by `FOLDER_SELECTION_PERMISSION` (`admin` or `all`). Can be toggled on/off with `FOLDER_SELECTION_ENABLED`. The active folder name appears in the Now Playing embed footer. When disabled, the bot falls back to the default `MUSIC_FOLDER` — fully backward-compatible. User command messages and bot replies auto-delete after `AUTO_DELETE_TIMEOUT` seconds to keep the chat tidy. ([#PR])
 - **Embed button controls** — The Now Playing embed now includes interactive buttons for track control. Three buttons appear below the embed: NEXT (⏭), PREV (⏮), and PAUSE/PLAY (⏯️). No commands required — just click to skip, go back, or pause. ([#PR])
 - **Democratic voting system** — When 2 or more people are in the voice channel, clicking NEXT or PREV triggers a 10-second YES/NO vote. The action only executes if ≥75% of voters say YES. Single listeners can skip/pause freely with no vote. ([#PR])
 - **PAUSE/PLAY visibility rule** — The PAUSE/PLAY button is hidden from the embed when 2+ humans are in the voice channel (it's a solo-listener feature). If a second person joins mid-track, clicking the button is silently ignored until the next embed refresh. ([#PR])

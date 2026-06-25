@@ -39,6 +39,10 @@ A 24/7 Discord music bot that plays audio files from a local folder as a continu
 | `!refresh` | Admin | Re-sends the Now Playing embed | `COMMAND_REFRESH` |
 | `!queue` | Admin | Shows the next 10 upcoming tracks | `COMMAND_QUEUE` |
 | `!resume` | Admin | Rejoins the voice channel and resumes playback. Useful for starting the music before anyone else joins. | `COMMAND_RESUME` |
+| `!folders` | Admin\* | Lists all configured music folders with the currently active one highlighted. | `COMMAND_FOLDERS` |
+| `!switch <name>` | Admin\* | Switches playback to the named music folder. Supports partial name matching. | `COMMAND_SWITCH` |
+
+> \* When `FOLDER_SELECTION_ENABLED=true`, permission is controlled by `FOLDER_SELECTION_PERMISSION` — set to `all` to let anyone switch folders, or `admin` (default) to restrict to admins. These commands only appear in `!help` when the feature is enabled.
 
 ### Supported Audio Formats
 
@@ -383,6 +387,72 @@ VOTE_TIMEOUT_SECONDS=10
 VOTE_THRESHOLD=0.75
 AUTO_DELETE_TIMEOUT=20
 ```
+
+### Multi-Folder Music Selection (Optional)
+
+The bot can manage multiple music folders (e.g. by genre) and let users switch between them on the fly — great for servers with diverse music tastes.
+
+#### Setup
+
+Add these to your `.env`:
+
+```ini
+# Enable multi-folder selection
+FOLDER_SELECTION_ENABLED=true
+
+# Who can use !folders and !switch: "admin" or "all"
+FOLDER_SELECTION_PERMISSION=admin
+
+# JSON mapping of display name → folder path
+MUSIC_FOLDERS_JSON={"Rock Music": "./music/Rock", "Lofi Beats": "./music/Lofi", "Classical": "./music/Classic"}
+
+# Optional: custom command names (defaults shown)
+COMMAND_FOLDERS=folders
+COMMAND_SWITCH=switch
+```
+
+Then create the folders and add music:
+
+```
+vibed-discord-bot/
+├── music/
+│   ├── Rock/          ← your rock songs
+│   ├── Lofi/          ← your lofi beats
+│   └── Classic/       ← your classical pieces
+```
+
+#### How It Works
+
+| Setting | Description |
+|---------|-------------|
+| `FOLDER_SELECTION_ENABLED` | Set to `true` to enable. When `false` (default), the bot uses `MUSIC_FOLDER` as normal — fully backward-compatible. |
+| `FOLDER_SELECTION_PERMISSION` | `admin` = only admins can switch. `all` = anyone can switch. |
+| `MUSIC_FOLDERS_JSON` | JSON object mapping display names to folder paths. Names are what users type in the `!switch` command. Paths can be relative (e.g. `./music/Rock`) or absolute. |
+
+#### Commands
+
+| Command | What It Does |
+|---------|-------------|
+| `!folders` | Lists all configured folders. The currently active folder is marked with ▶ and **bold**. |
+| `!switch <name>` | Switches to the named folder. Supports partial name matching — `!switch rock` matches "Rock Music". |
+
+Both commands and their responses auto-delete after `AUTO_DELETE_TIMEOUT` seconds. The user's original `!command` message is also deleted to keep the chat clean.
+
+#### Configuration Table
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FOLDER_SELECTION_ENABLED` | `false` | Enable/disable multi-folder selection |
+| `FOLDER_SELECTION_PERMISSION` | `admin` | `admin` or `all` |
+| `MUSIC_FOLDERS_JSON` | `{}` | JSON mapping of names → paths |
+| `COMMAND_FOLDERS` | `folders` | Custom command name for listing folders |
+| `COMMAND_SWITCH` | `switch` | Custom command name for switching folders |
+
+#### Now Playing Embed
+
+When an alternate folder is selected, the embed footer shows the folder name:
+
+> 📂 Rock Music • Up Next: Back in Black
 
 ---
 
