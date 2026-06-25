@@ -1314,6 +1314,11 @@ class RadioManager:
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass
 
+    @staticmethod
+    def _schedule_msg_delete(msg: discord.Message) -> None:
+        """Schedule *msg* for deferred deletion after AUTO_DELETE_TIMEOUT seconds."""
+        asyncio.create_task(RadioManager._delete_after(msg, config.AUTO_DELETE_TIMEOUT))
+
     # ===================================================================
     # PLAYBACK CORE
     # ===================================================================
@@ -2099,12 +2104,22 @@ async def resume_radio(ctx: commands.Context) -> None:
 @bot.command(name=config.COMMAND_FOLDERS)
 async def list_folders(ctx: commands.Context) -> None:
     """List all configured music folders and show the currently active one."""
+    # Schedule the user's command message for deletion
+    if isinstance(ctx.channel, discord.TextChannel):
+        radio._schedule_msg_delete(ctx.message)
+
     if not can_switch_folder(ctx.author):
-        await ctx.send("❌ You don't have permission to use this command!")
+        await ctx.send(
+            "❌ You don't have permission to use this command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     if not config.MUSIC_FOLDERS:
-        await ctx.send("❌ No alternate music folders are configured.")
+        await ctx.send(
+            "❌ No alternate music folders are configured.",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     lines: list[str] = []
@@ -2123,27 +2138,33 @@ async def list_folders(ctx: commands.Context) -> None:
     embed.set_footer(
         text=f"Use {bot.command_prefix}{config.COMMAND_SWITCH} <name> to switch"
     )
-    if isinstance(ctx.channel, discord.TextChannel):
-        await radio.send_autodelete(ctx.channel, "", embed=embed)
+    await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
 
 
 @bot.command(name=config.COMMAND_SWITCH)
 async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -> None:
     """Switch to a different music folder. Provide the folder display name."""
+    # Schedule the user's command message for deletion
+    if isinstance(ctx.channel, discord.TextChannel):
+        radio._schedule_msg_delete(ctx.message)
+
     if not can_switch_folder(ctx.author):
-        await ctx.send("❌ You don't have permission to use this command!")
+        await ctx.send(
+            "❌ You don't have permission to use this command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     if not folder_name:
         await ctx.send(
             f"❌ Please specify a folder name. "
-            f"Use `{bot.command_prefix}{config.COMMAND_FOLDERS}` to see available folders."
+            f"Use `{bot.command_prefix}{config.COMMAND_FOLDERS}` to see available folders.",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
         )
         return
 
     result = await radio.switch_folder(folder_name)
-    if isinstance(ctx.channel, discord.TextChannel):
-        await radio.send_autodelete(ctx.channel, result)
+    await ctx.send(result, delete_after=config.AUTO_DELETE_TIMEOUT)
 
 
 # -----------------------------------------------------------------------
