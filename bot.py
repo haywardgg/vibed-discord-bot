@@ -2123,7 +2123,8 @@ async def list_folders(ctx: commands.Context) -> None:
     embed.set_footer(
         text=f"Use {bot.command_prefix}{config.COMMAND_SWITCH} <name> to switch"
     )
-    await ctx.send(embed=embed)
+    if isinstance(ctx.channel, discord.TextChannel):
+        await radio.send_autodelete(ctx.channel, "", embed=embed)
 
 
 @bot.command(name=config.COMMAND_SWITCH)
@@ -2141,7 +2142,8 @@ async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -
         return
 
     result = await radio.switch_folder(folder_name)
-    await ctx.send(result)
+    if isinstance(ctx.channel, discord.TextChannel):
+        await radio.send_autodelete(ctx.channel, result)
 
 
 # -----------------------------------------------------------------------
