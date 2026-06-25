@@ -3,6 +3,7 @@ All environment-specific settings are loaded from environment variables,
 with sensible fallback defaults for development/testing.
 """
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -128,6 +129,38 @@ VOTE_TIMEOUT_SECONDS = _env_int("VOTE_TIMEOUT_SECONDS", 10)
 VOTE_THRESHOLD = _env_float("VOTE_THRESHOLD", 0.75)
 AUTO_DELETE_TIMEOUT = _env_int("AUTO_DELETE_TIMEOUT", 20)
 
+# ---------------------------------------------------------------------------
+# Multi-folder music selection
+# ---------------------------------------------------------------------------
+# When enabled, the bot owner can configure multiple music folders with
+# display names. Users (or just admins, depending on permission) can
+# switch between them with the !switch command.
+#
+# MUSIC_FOLDERS_JSON — JSON mapping of display name → folder path.
+#   Example: {"Rock Music": "./music/Rock", "Lofi Beats": "./music/Lofi", "Classical": "./music/Classic"}
+#   Leave as "{}" or empty to disable. Falls back to the main MUSIC_FOLDER.
+FOLDER_SELECTION_ENABLED = _env_bool("FOLDER_SELECTION_ENABLED", False)
+
+# Who can use !folders and !switch: "all" (anyone) or "admin" (admins only).
+FOLDER_SELECTION_PERMISSION = os.getenv("FOLDER_SELECTION_PERMISSION", "admin")
+
+# Configurable command names for folder switching
+COMMAND_FOLDERS = os.getenv("COMMAND_FOLDERS", "folders")
+COMMAND_SWITCH = os.getenv("COMMAND_SWITCH", "switch")
+
+# Parse the JSON mapping — robust parsing with graceful fallback
+_raw_folders = os.getenv("MUSIC_FOLDERS_JSON", "{}")
+MUSIC_FOLDERS: dict[str, str] = {}
+try:
+    _parsed = json.loads(_raw_folders)
+    if isinstance(_parsed, dict):
+        for _name, _path in _parsed.items():
+            if isinstance(_name, str) and isinstance(_path, str):
+                _resolved = str(Path(_path).resolve())
+                MUSIC_FOLDERS[_name] = _resolved
+except (json.JSONDecodeError, TypeError) as _exc:
+    log.warning("MUSIC_FOLDERS_JSON is invalid JSON: %s", _exc)
+
 
 # ---------------------------------------------------------------------------
 # Auto-sync missing keys from .env.example into the user's .env file.
@@ -235,6 +268,20 @@ def _validate_config() -> None:
             "audio files (.mp3, .flac, .m4a, .ogg) before starting the bot.",
             MUSIC_FOLDER,
         )
+
+    if FOLDER_SELECTION_ENABLED:
+        if not MUSIC_FOLDERS:
+            log.warning(
+                "FOLDER_SELECTION_ENABLED is true but MUSIC_FOLDERS_JSON "
+                "is empty or invalid. Multi-folder selection will not work."
+            )
+        for name, path in MUSIC_FOLDERS.items():
+            if not Path(path).is_dir():
+                log.warning(
+                    "Music folder '%s' (path: '%s') does not exist. "
+                    "Create the folder and add audio files.",
+                    name, path,
+                )
 
 
 _sync_env()

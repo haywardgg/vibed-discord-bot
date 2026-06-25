@@ -901,10 +901,27 @@ class RadioManager:
         # ---- Pause state (prevents auto-resume from undoing manual pause) ----
         self._manual_pause: bool = False
 
+        # ---- Multi-folder selection ----
+        self.active_folder_name: str | None = None
+        self.active_folder_path: str | None = None
+
         # ---- Track ratings (in-memory, loaded from DB on track change) ----
         self.ratings_db = RatingsDB("ratings.db")
         self.rating_up: set[int] = set()
         self.rating_down: set[int] = set()
+
+    # -------------------------------------------------------------------
+    # Resolve the current music folder — active selection wins, else default
+    # -------------------------------------------------------------------
+    def _get_current_music_folder(self) -> str:
+        """Return the path to use for scanning music files."""
+        if (
+            config.FOLDER_SELECTION_ENABLED
+            and self.active_folder_path
+            and self.active_folder_path != config.MUSIC_FOLDER
+        ):
+            return self.active_folder_path
+        return config.MUSIC_FOLDER
 
     # -------------------------------------------------------------------
     # Album art — tries embedded tags first, then common filenames
@@ -1026,8 +1043,10 @@ class RadioManager:
         return f"{seconds // 60}:{seconds % 60:02d}"
 
     @staticmethod
-    def get_all_music_files() -> list[str]:
-        """Glob the music folder for all supported audio files (shuffled)."""
+    def get_all_music_files(folder_path: str | None = None) -> list[str]:
+        """Glob *folder_path* (or the default MUSIC_FOLDER) for audio files (shuffled)."""
+        if folder_path is None:
+            folder_path = config.MUSIC_FOLDER
         music_files: list[str] = []
         extensions = [
             "*.mp3", "*.flac", "*.m4a", "*.ogg",
@@ -1035,14 +1054,14 @@ class RadioManager:
         for ext in extensions:
             music_files.extend(
                 glob.glob(
-                    os.path.join(config.MUSIC_FOLDER, ext),
+                    os.path.join(folder_path, ext),
                 ),
             )
             # Also match uppercase variants on Unix (Windows glob is
             # already case-insensitive).
             music_files.extend(
                 glob.glob(
-                    os.path.join(config.MUSIC_FOLDER, ext.upper()),
+                    os.path.join(folder_path, ext.upper()),
                 ),
             )
         # Deduplicate — prevents the same file from appearing twice
@@ -1175,8 +1194,14 @@ class RadioManager:
             name="Vibed Discord Bot",
             url="https://github.com/haywardgg/vibed-discord-bot",
         )
+        # Build footer text — includes "Up Next:" and optional folder indicator
+        footer_parts: list[str] = []
+        if config.FOLDER_SELECTION_ENABLED and self.active_folder_name:
+            footer_parts.append(f"📂 {self.active_folder_name}")
         if footer_text:
-            embed.set_footer(text=footer_text)
+            footer_parts.append(footer_text)
+        if footer_parts:
+            embed.set_footer(text="  •  ".join(footer_parts))
 
         # Attach banner image and/or album art
         files: list[discord.File] = []
@@ -1313,9 +1338,10 @@ class RadioManager:
             return
 
         if not self.music_queue:
-            self.music_queue = self.get_all_music_files()
+            folder = self._get_current_music_folder()
+            self.music_queue = self.get_all_music_files(folder)
             if not self.music_queue:
-                log.error("No music files found in %s", config.MUSIC_FOLDER)
+                log.error("No music files found in %s", folder)
                 channel = await self.get_text_channel()
                 if channel:
                     await channel.send("❌ No music files found!")
@@ -1542,6 +1568,75 @@ class RadioManager:
                     await self.start_radio()
 
     # -------------------------------------------------------------------
+    # Multi-folder switching — called by the !switch command
+    # -------------------------------------------------------------------
+
+    async def switch_folder(self, display_name: str) -> str:
+        """Switch to a different music folder. Returns a human-readable result.
+
+        Looks up *display_name* (case-insensitive) in config.MUSIC_FOLDERS,
+        sets active_folder_name/path, refills the queue, and stops current
+        playback so play_next() starts from the new folder.
+        """
+        if not config.FOLDER_SELECTION_ENABLED:
+            return "❌ Folder selection is not enabled."
+
+        if not config.MUSIC_FOLDERS:
+            return "❌ No alternate music folders are configured."
+
+        # Case-insensitive lookup; also support partial prefix matching
+        lookup = display_name.strip().lower()
+        match: str | None = None
+        for name in config.MUSIC_FOLDERS:
+            if name.lower() == lookup:
+                match = name
+                break
+        if match is None:
+            # Try prefix matching as a fallback
+            candidates = [
+                n for n in config.MUSIC_FOLDERS if n.lower().startswith(lookup)
+            ]
+            if len(candidates) == 1:
+                match = candidates[0]
+            elif len(candidates) > 1:
+                return (
+                    f"❌ Ambiguous: did you mean one of: "
+                    f"{', '.join(candidates)}?"
+                )
+
+        if match is None:
+            available = ", ".join(f"`{n}`" for n in config.MUSIC_FOLDERS)
+            return f"❌ Unknown folder. Available: {available}"
+
+        target_path = config.MUSIC_FOLDERS[match]
+
+        if self.active_folder_name == match:
+            return f"✅ Already playing from **{match}**."
+
+        old_name = self.active_folder_name
+        self.active_folder_name = match
+        self.active_folder_path = target_path
+
+        log.info(
+            "Switched music folder: %s → %s (%s)",
+            old_name or "(default)", match, target_path,
+        )
+
+        async with self._lock:
+            # Refill queue from the new folder
+            self.music_queue = self.get_all_music_files(target_path)
+            self.track_history.clear()
+
+            # Stop current playback so play_next() picks up the new queue
+            if (
+                self.voice_client
+                and (self.voice_client.is_playing() or self.voice_client.is_paused())
+            ):
+                self.voice_client.stop()
+
+        return f"📂 Switched to **{match}** ({len(self.music_queue)} tracks loaded)"
+
+    # -------------------------------------------------------------------
     # Connection management — start / stop the radio
     # -------------------------------------------------------------------
 
@@ -1652,7 +1747,7 @@ radio = RadioManager()
 
 
 # =======================================================================
-# Permission helper — checks whether a member can run admin commands
+# Permission helpers
 # =======================================================================
 def is_admin(member: discord.Member | discord.User) -> bool:
     """Return True if *member* is allowed to use admin-only commands."""
@@ -1663,6 +1758,15 @@ def is_admin(member: discord.Member | discord.User) -> bool:
     if member.guild_permissions.administrator:
         return True
     return config.ADMIN_ROLE_ID in {r.id for r in member.roles}
+
+
+def can_switch_folder(member: discord.Member | discord.User) -> bool:
+    """Return True if *member* is allowed to use folder selection commands."""
+    if not config.FOLDER_SELECTION_ENABLED:
+        return False
+    if config.FOLDER_SELECTION_PERMISSION == "all":
+        return True
+    return is_admin(member)
 
 
 # =======================================================================
@@ -1989,6 +2093,58 @@ async def resume_radio(ctx: commands.Context) -> None:
 
 
 # -----------------------------------------------------------------------
+# Folder selection commands — only available when FOLDER_SELECTION_ENABLED
+# -----------------------------------------------------------------------
+
+@bot.command(name=config.COMMAND_FOLDERS)
+async def list_folders(ctx: commands.Context) -> None:
+    """List all configured music folders and show the currently active one."""
+    if not can_switch_folder(ctx.author):
+        await ctx.send("❌ You don't have permission to use this command!")
+        return
+
+    if not config.MUSIC_FOLDERS:
+        await ctx.send("❌ No alternate music folders are configured.")
+        return
+
+    lines: list[str] = []
+    active_name = radio.active_folder_name
+    for name in config.MUSIC_FOLDERS:
+        if name == active_name:
+            lines.append(f"▶ **{name}** ← current")
+        else:
+            lines.append(f"  {name}")
+
+    embed = discord.Embed(
+        title="📂 Music Folders",
+        description="\n".join(lines),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(
+        text=f"Use {bot.command_prefix}{config.COMMAND_SWITCH} <name> to switch"
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name=config.COMMAND_SWITCH)
+async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -> None:
+    """Switch to a different music folder. Provide the folder display name."""
+    if not can_switch_folder(ctx.author):
+        await ctx.send("❌ You don't have permission to use this command!")
+        return
+
+    if not folder_name:
+        await ctx.send(
+            f"❌ Please specify a folder name. "
+            f"Use `{bot.command_prefix}{config.COMMAND_FOLDERS}` to see available folders."
+        )
+        return
+
+    result = await radio.switch_folder(folder_name)
+    await ctx.send(result)
+
+
+# -----------------------------------------------------------------------
 # Custom help command — lists all available commands
 # -----------------------------------------------------------------------
 @bot.command(name=config.HELP_COMMAND)
@@ -2005,6 +2161,14 @@ async def custom_help(ctx: commands.Context) -> None:
         f"**{prefix}{config.COMMAND_QUEUE}** — Show upcoming tracks (admin)",
         f"**{prefix}{config.COMMAND_RESUME}** — Resume playback after AFK leave (admin)",
     ]
+    if config.FOLDER_SELECTION_ENABLED:
+        perm_label = "(anyone)" if config.FOLDER_SELECTION_PERMISSION == "all" else "(admin)"
+        lines.append(
+            f"**{prefix}{config.COMMAND_FOLDERS}** — List available music folders {perm_label}"
+        )
+        lines.append(
+            f"**{prefix}{config.COMMAND_SWITCH} <name>** — Switch music folder {perm_label}"
+        )
     embed = discord.Embed(
         title="📻 Vibed Discord Bot — Commands",
         description="\n".join(lines),
