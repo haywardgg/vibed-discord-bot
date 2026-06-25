@@ -1027,15 +1027,24 @@ class RadioManager:
         """Glob the music folder for all supported audio files (shuffled)."""
         music_files: list[str] = []
         extensions = [
-            "*.mp3", "*.MP3",
-            "*.flac", "*.FLAC",
-            "*.m4a", "*.M4A",
-            "*.ogg", "*.OGG",
+            "*.mp3", "*.flac", "*.m4a", "*.ogg",
         ]
         for ext in extensions:
             music_files.extend(
-                glob.glob(os.path.join(config.MUSIC_FOLDER, ext)),
+                glob.glob(
+                    os.path.join(config.MUSIC_FOLDER, ext),
+                ),
             )
+            # Also match uppercase variants on Unix (Windows glob is
+            # already case-insensitive).
+            music_files.extend(
+                glob.glob(
+                    os.path.join(config.MUSIC_FOLDER, ext.upper()),
+                ),
+            )
+        # Deduplicate — prevents the same file from appearing twice
+        # in the queue, which would skew play counts 2× for some tracks.
+        music_files = list(dict.fromkeys(music_files))
         random.shuffle(music_files)
         return music_files
 
