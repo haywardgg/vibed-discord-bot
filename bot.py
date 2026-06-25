@@ -227,7 +227,7 @@ class RatingsDB:
 
     # -------------------------------------------------------------------
     # get_all_tracks_stats() — ensures every known track has a ratings
-    # row, then fetches all of them sorted by play count.
+    # row, then fetches all of them sorted alphabetically by path.
     # -------------------------------------------------------------------
     def get_all_tracks_stats(
         self, all_track_paths: list[str],
@@ -244,7 +244,7 @@ class RatingsDB:
         rows = self._conn.execute(
             f"SELECT track_path, up_count, down_count, play_count "
             f"FROM ratings WHERE track_path IN ({placeholders}) "
-            f"ORDER BY play_count DESC, up_count DESC",
+            f"ORDER BY track_path ASC",
             all_track_paths,
         ).fetchall()
         return [(r[0], r[1], r[2], r[3]) for r in rows]
