@@ -743,18 +743,19 @@ class PlayerControlsView(discord.ui.View):
     async def stats_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
-        # Prevent spamming — reject if a stats embed is already visible.
-        # Set a sentinel immediately (before any await) so concurrent button
-        # presses see a non-None value and return rather than racing through.
-        if self.radio.stats_message is not None:
+        # Prevent spamming — reject if stats are already being loaded or visible.
+        # Set _stats_loading immediately (before any await) to close the race
+        # window where two concurrent button presses both see False and proceed.
+        if self.radio._stats_loading or self.radio.stats_message is not None:
             await interaction.response.defer()
             return
-        self.radio.stats_message = True  # type: ignore[assignment]  # sentinel
+        self.radio._stats_loading = True
 
         await interaction.response.defer()
 
         channel = await self._get_text_channel()
         if channel is None:
+            self.radio._stats_loading = False
             return
 
         # Get every audio file in the music folder
@@ -763,6 +764,7 @@ class PlayerControlsView(discord.ui.View):
             await channel.send(
                 "📊 No music files found.", delete_after=60,
             )
+            self.radio._stats_loading = False
             return
 
         stats = self.radio.ratings_db.get_all_tracks_stats(all_paths)
@@ -823,6 +825,7 @@ class PlayerControlsView(discord.ui.View):
     async def _clear_stats_tracker(self, delay: int) -> None:
         await asyncio.sleep(delay)
         self.radio.stats_message = None
+        self.radio._stats_loading = False
 
     # ------------------------------------------------------------------
     # _update_rating_labels() — refreshes the 👍/👎 button text with counts
@@ -895,6 +898,7 @@ class RadioManager:
 
         # ---- Stats output tracking ----
         self.stats_message: discord.Message | None = None
+        self._stats_loading: bool = False  # guards the stats button against races
 
         # ---- PREV tracking (prevents double-counting play stats) ----
         self._preved: bool = False
@@ -1273,10 +1277,9 @@ class RadioManager:
         # PAUSE/PLAY is a solo-listener feature — hide it with multiple users
         if humans > 1:
             for child in list(view.children):
-                if isinstance(child, discord.ui.Button) and getattr(child, "callback", None) is not None:
-                    if getattr(child.callback, "__name__", "") == "pause_play_button":
-                        view.remove_item(child)
-                        break
+                if isinstance(child, discord.ui.Button) and getattr(getattr(child, "callback", None), "__name__", "") == "pause_play_button":
+                    view.remove_item(child)
+                    break
 
         return view
 
