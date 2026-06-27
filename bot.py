@@ -1390,7 +1390,7 @@ class RadioManager:
         source = discord.FFmpegPCMAudio(
             self.current_song_path,
             before_options="-nostdin",
-            options="-vn -af aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+            options="-vn -af aresample=48000",
         )
         source = discord.PCMVolumeTransformer(source, volume=self.volume)
 
