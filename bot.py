@@ -88,7 +88,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 class RatingsDB:
     """Persistent SQLite store for track thumb ratings and play counts."""
 
-    def __init__(self, db_path: str = "ratings.db") -> None:
+    def __init__(self, db_path: str = str(Path(__file__).parent / "ratings.db")) -> None:
         self.db_path = db_path
         # connect() creates the file if it doesn't exist yet
         self._conn = sqlite3.connect(db_path)
@@ -519,7 +519,7 @@ class PlayerControlsView(discord.ui.View):
                 )
             return
 
-        ratio = vote_view.yes_count / total if total > 0 else 0.0
+        ratio = vote_view.yes_count / total
 
         if ratio >= config.VOTE_THRESHOLD:
             channel = await self._get_text_channel()
@@ -743,15 +743,19 @@ class PlayerControlsView(discord.ui.View):
     async def stats_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
-        # Prevent spamming — reject if a stats embed is already visible
-        if self.radio.stats_message is not None:
+        # Prevent spamming — reject if stats are already being loaded or visible.
+        # Set _stats_loading immediately (before any await) to close the race
+        # window where two concurrent button presses both see False and proceed.
+        if self.radio._stats_loading or self.radio.stats_message is not None:
             await interaction.response.defer()
             return
+        self.radio._stats_loading = True
 
         await interaction.response.defer()
 
         channel = await self._get_text_channel()
         if channel is None:
+            self.radio._stats_loading = False
             return
 
         # Get every audio file in the music folder
@@ -760,6 +764,7 @@ class PlayerControlsView(discord.ui.View):
             await channel.send(
                 "📊 No music files found.", delete_after=60,
             )
+            self.radio._stats_loading = False
             return
 
         stats = self.radio.ratings_db.get_all_tracks_stats(all_paths)
@@ -816,11 +821,11 @@ class PlayerControlsView(discord.ui.View):
         # Clean up after 1 minute
         asyncio.create_task(self._delete_after(self.radio.stats_message, 60))
         asyncio.create_task(self._clear_stats_tracker(60))
-        self.radio._stats_loading = False
 
     async def _clear_stats_tracker(self, delay: int) -> None:
         await asyncio.sleep(delay)
         self.radio.stats_message = None
+        self.radio._stats_loading = False
 
     # ------------------------------------------------------------------
     # _update_rating_labels() — refreshes the 👍/👎 button text with counts
@@ -893,7 +898,7 @@ class RadioManager:
 
         # ---- Stats output tracking ----
         self.stats_message: discord.Message | None = None
-        self._stats_loading: bool = False
+        self._stats_loading: bool = False  # guards the stats button against races
 
         # ---- PREV tracking (prevents double-counting play stats) ----
         self._preved: bool = False
@@ -906,7 +911,7 @@ class RadioManager:
         self.active_folder_path: str | None = None
 
         # ---- Track ratings (in-memory, loaded from DB on track change) ----
-        self.ratings_db = RatingsDB("ratings.db")
+        self.ratings_db = RatingsDB(str(Path(__file__).parent / "ratings.db"))
         self.rating_up: set[int] = set()
         self.rating_down: set[int] = set()
 
@@ -1271,8 +1276,10 @@ class RadioManager:
 
         # PAUSE/PLAY is a solo-listener feature — hide it with multiple users
         if humans > 1:
-            pause_button = view.children[2]  # pause_play_button is 3rd child
-            view.remove_item(pause_button)
+            for child in list(view.children):
+                if isinstance(child, discord.ui.Button) and getattr(getattr(child, "callback", None), "__name__", "") == "pause_play_button":
+                    view.remove_item(child)
+                    break
 
         return view
 
@@ -1647,15 +1654,13 @@ class RadioManager:
             return
 
         try:
-            deleted: int = 0
-            async for msg in channel.history(limit=50):
-                if msg.author == bot.user:
-                    await msg.delete()
-                    deleted += 1
+            deleted = await channel.purge(
+                limit=50, check=lambda m: m.author == bot.user,
+            )
             if deleted:
                 log.info(
                     "Purged %d old bot message(s) from #%s",
-                    deleted, channel.name,
+                    len(deleted), channel.name,
                 )
         except (discord.Forbidden, discord.HTTPException) as exc:
             log.warning("Could not purge old bot messages: %s", exc)
@@ -1725,7 +1730,7 @@ class RadioManager:
             await self.play_next()
 
         self._is_connecting = False
-        self._last_reconnect_time = asyncio.get_event_loop().time()
+        self._last_reconnect_time = asyncio.get_running_loop().time()
 
     async def stop_radio(self) -> None:
         """Gracefully disconnect and tear down all background tasks."""
@@ -1738,6 +1743,7 @@ class RadioManager:
             self.voice_client = None
             self.is_afk_disconnected = False
             await self.delete_current_embed()
+        self.ratings_db.close()
 
 
 # =======================================================================
@@ -1897,7 +1903,7 @@ async def on_voice_state_update(
         if radio._is_connecting:
             return
 
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if now - radio._last_reconnect_time < radio._reconnect_cooldown:
             log.debug(
                 "Ignoring disconnect – %.1fs since last reconnect (cooldown %.1fs)",
@@ -2207,7 +2213,7 @@ async def shutdown_handler() -> None:
 
 
 def _install_signal_handlers() -> None:
-    loop = bot.loop
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(

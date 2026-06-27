@@ -207,13 +207,22 @@ def _sync_env() -> None:
         return
 
     # Append missing keys to .env
-    with open(env_path, "a", encoding="utf-8") as f:
-        f.write("\n")
-        f.write("# ---------------------------------------------------------------------------\n")
-        f.write("# Auto-added from .env.example after update — restart the bot to apply.\n")
-        f.write("# ---------------------------------------------------------------------------\n")
-        for key, raw_line in missing.items():
-            f.write(raw_line + "\n")
+    try:
+        with open(env_path, "a", encoding="utf-8") as f:
+            f.write("\n")
+            f.write("# ---------------------------------------------------------------------------\n")
+            f.write("# Auto-added from .env.example after update — restart the bot to apply.\n")
+            f.write("# ---------------------------------------------------------------------------\n")
+            for key, raw_line in missing.items():
+                f.write(raw_line + "\n")
+    except (PermissionError, OSError) as exc:
+        log.warning(
+            "Could not write new keys to .env (%s). "
+            "The following keys need to be added manually: %s",
+            exc,
+            ", ".join(sorted(missing.keys())),
+        )
+        return
 
     global SHOULD_RESTART
     SHOULD_RESTART = True
