@@ -98,6 +98,8 @@ _music_folder = os.getenv("MUSIC_FOLDER", "./music")
 MUSIC_FOLDER = str(Path(_music_folder).resolve()) if _music_folder else ""
 DEFAULT_VOLUME = _env_float("DEFAULT_VOLUME", 0.3)
 AFK_TIMEOUT_SECONDS = _env_int("AFK_TIMEOUT_SECONDS", 60)
+AFK_AUTO_LEAVE = _env_bool("AFK_AUTO_LEAVE", True)
+AUTO_STOP_MINUTES = _env_int("AUTO_STOP_MINUTES", 0)
 
 # ---------------------------------------------------------------------------
 # Embed header image (optional)

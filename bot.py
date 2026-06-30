@@ -906,6 +906,9 @@ class RadioManager:
         # ---- Pause state (prevents auto-resume from undoing manual pause) ----
         self._manual_pause: bool = False
 
+        # ---- Auto-stop timer ----
+        self._auto_stop_task: asyncio.Task | None = None
+
         # ---- Multi-folder selection ----
         self.active_folder_name: str | None = None
         self.active_folder_path: str | None = None
@@ -1525,8 +1528,11 @@ class RadioManager:
                     and not self.is_afk_disconnected
                 ):
                     if (
-                        self.afk_timer_task is None
-                        or self.afk_timer_task.done()
+                        config.AFK_AUTO_LEAVE
+                        and (
+                            self.afk_timer_task is None
+                            or self.afk_timer_task.done()
+                        )
                     ):
                         log.info(
                             "Channel empty – starting %ds AFK timer",
@@ -1726,14 +1732,45 @@ class RadioManager:
             self._monitor_task.cancel()
         self._monitor_task = asyncio.create_task(self.check_channel_activity())
 
+        # Schedule the auto-stop timer if configured
+        if config.AUTO_STOP_MINUTES > 0:
+            if self._auto_stop_task and not self._auto_stop_task.done():
+                self._auto_stop_task.cancel()
+            self._auto_stop_task = asyncio.create_task(
+                self._auto_stop_schedule(),
+            )
+            log.info(
+                "Auto-stop scheduled in %d minutes",
+                config.AUTO_STOP_MINUTES,
+            )
+
         async with self._lock:
             await self.play_next()
 
         self._is_connecting = False
         self._last_reconnect_time = asyncio.get_running_loop().time()
 
+    # -------------------------------------------------------------------
+    # Auto-stop — if AUTO_STOP_MINUTES > 0, stop the radio after N minutes
+    # -------------------------------------------------------------------
+
+    async def _auto_stop_schedule(self) -> None:
+        """Wait AUTO_STOP_MINUTES then stop the radio."""
+        minutes = config.AUTO_STOP_MINUTES
+        if minutes <= 0:
+            return
+        await asyncio.sleep(minutes * 60)
+        log.info(
+            "Auto-stop timer reached (%d min) — shutting down radio",
+            minutes,
+        )
+        await self.stop_radio()
+
     async def stop_radio(self) -> None:
         """Gracefully disconnect and tear down all background tasks."""
+        if self._auto_stop_task and not self._auto_stop_task.done():
+            self._auto_stop_task.cancel()
+            self._auto_stop_task = None
         if self.voice_client:
             if self.afk_timer_task and not self.afk_timer_task.done():
                 self.afk_timer_task.cancel()
