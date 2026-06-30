@@ -906,9 +906,6 @@ class RadioManager:
         # ---- Pause state (prevents auto-resume from undoing manual pause) ----
         self._manual_pause: bool = False
 
-        # ---- Auto-stop timer ----
-        self._auto_stop_task: asyncio.Task | None = None
-
         # ---- Multi-folder selection ----
         self.active_folder_name: str | None = None
         self.active_folder_path: str | None = None
@@ -1471,7 +1468,7 @@ class RadioManager:
             ch = self.voice_client.channel
             if ch and not any(not m.bot for m in ch.members):
                 log.info(
-                    "Channel empty for %ds – leaving voice",
+                    "Channel empty for %ds – pausing playback",
                     config.AFK_TIMEOUT_SECONDS,
                 )
 
@@ -1479,6 +1476,10 @@ class RadioManager:
                     await ch.edit(status="🎧 DJ waiting..")  # type: ignore[call-overload]
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     log.warning("Could not update channel status: %s", exc)
+
+                # Pause playback
+                if self.voice_client.is_playing():
+                    self.voice_client.pause()
 
                 # Post one final embed showing the paused state
                 channel = await self.get_text_channel()
@@ -1493,16 +1494,21 @@ class RadioManager:
                         self.current_song_path, info, art, is_paused=True,
                     )
 
-                self.is_afk_disconnected = True
-                if self._monitor_task and not self._monitor_task.done():
-                    self._monitor_task.cancel()
-                    self._monitor_task = None
-                await self.voice_client.disconnect()
-                self.voice_client = None
+                if config.AFK_AUTO_LEAVE:
+                    self.is_afk_disconnected = True
+                    if self._monitor_task and not self._monitor_task.done():
+                        self._monitor_task.cancel()
+                        self._monitor_task = None
+                    await self.voice_client.disconnect()
+                    self.voice_client = None
 
-                self._monitor_task = asyncio.create_task(
-                    self.check_channel_activity(),
-                )
+                    self._monitor_task = asyncio.create_task(
+                        self.check_channel_activity(),
+                    )
+                else:
+                    log.info(
+                        "AFK_AUTO_LEAVE is false – staying in channel while paused",
+                    )
 
     async def check_channel_activity(self) -> None:
         """5-second polling loop that manages AFK timers and auto-resume."""
@@ -1528,7 +1534,7 @@ class RadioManager:
                     and not self.is_afk_disconnected
                 ):
                     if (
-                        config.AFK_AUTO_LEAVE
+                        config.AFK_PAUSE_ON_EMPTY
                         and (
                             self.afk_timer_task is None
                             or self.afk_timer_task.done()
@@ -1732,45 +1738,14 @@ class RadioManager:
             self._monitor_task.cancel()
         self._monitor_task = asyncio.create_task(self.check_channel_activity())
 
-        # Schedule the auto-stop timer if configured
-        if config.AUTO_STOP_MINUTES > 0:
-            if self._auto_stop_task and not self._auto_stop_task.done():
-                self._auto_stop_task.cancel()
-            self._auto_stop_task = asyncio.create_task(
-                self._auto_stop_schedule(),
-            )
-            log.info(
-                "Auto-stop scheduled in %d minutes",
-                config.AUTO_STOP_MINUTES,
-            )
-
         async with self._lock:
             await self.play_next()
 
         self._is_connecting = False
         self._last_reconnect_time = asyncio.get_running_loop().time()
 
-    # -------------------------------------------------------------------
-    # Auto-stop — if AUTO_STOP_MINUTES > 0, stop the radio after N minutes
-    # -------------------------------------------------------------------
-
-    async def _auto_stop_schedule(self) -> None:
-        """Wait AUTO_STOP_MINUTES then stop the radio."""
-        minutes = config.AUTO_STOP_MINUTES
-        if minutes <= 0:
-            return
-        await asyncio.sleep(minutes * 60)
-        log.info(
-            "Auto-stop timer reached (%d min) — shutting down radio",
-            minutes,
-        )
-        await self.stop_radio()
-
     async def stop_radio(self) -> None:
         """Gracefully disconnect and tear down all background tasks."""
-        if self._auto_stop_task and not self._auto_stop_task.done():
-            self._auto_stop_task.cancel()
-            self._auto_stop_task = None
         if self.voice_client:
             if self.afk_timer_task and not self.afk_timer_task.done():
                 self.afk_timer_task.cancel()
