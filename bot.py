@@ -1,39 +1,3 @@
-"""
-Discord Radio Bot — 24/7 music playback from a local folder.
-======================================================================
-
-                           TABLE OF CONTENTS
-======================================================================
-  • Imports & Logging                               (line 44)
-  • Bot setup (intents, prefix)                     (line 77)
-  • Ratings Database (SQLite)                       (line 95)
-  • Player Control Button Views
-      - VoteView (YES/NO for skip/prev voting)      (line 291)
-      - PlayerControlsView (embed buttons)          (line 351)
-  • RadioManager class
-      - Audio metadata                              (line 767)
-      - Album art extraction                        (line 908)
-      - Formatting & file discovery                 (line 1017)
-      - Embed management                            (line 1061)
-      - Button view builder                         (line 1185)
-      - Track history                               (line 1233)
-      - Auto-delete helper                          (line 1247)
-      - Playback core                               (line 1268)
-          · play_next() — dequeues & plays track    (line 1277)
-      - Pause / Resume                              (line 1365)
-      - AFK / leave logic                           (line 1402)
-      - Connection management                       (line 1541)
-  • Singleton RadioManager                          (line 1615)
-  • Permission helper (is_admin)                    (line 1621)
-  • Voice reconnection handler                      (line 1633)
-  • Event handlers (on_ready, etc)                  (line 1661)
-  • Bot commands (!now, !volume, !skip, etc.)       (line 1766)
-  • Custom help command                             (line 1913)
-  • Signal handling & graceful shutdown             (line 1938)
-  • Entry point                                     (line 1967)
-======================================================================
-"""
-
 import asyncio
 import glob
 import logging
@@ -1117,7 +1081,7 @@ class RadioManager:
         # Choose colours: blue = playing, orange = paused/AFK
         if is_paused:
             color = discord.Color.orange()
-            voice_status = "🎧 DJ waiting.."
+            voice_status = config.VOICE_IDLE_STATUS
         else:
             color = discord.Color.blue()
             voice_status = f"🎧 {song_info['title']}"
@@ -1473,7 +1437,7 @@ class RadioManager:
                 )
 
                 try:
-                    await ch.edit(status="🎧 DJ waiting..")  # type: ignore[call-overload]
+                    await ch.edit(status=config.VOICE_IDLE_STATUS)  # type: ignore[call-overload]
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     log.warning("Could not update channel status: %s", exc)
 

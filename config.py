@@ -100,6 +100,7 @@ DEFAULT_VOLUME = _env_float("DEFAULT_VOLUME", 0.3)
 AFK_TIMEOUT_SECONDS = _env_int("AFK_TIMEOUT_SECONDS", 60)
 AFK_AUTO_LEAVE = _env_bool("AFK_AUTO_LEAVE", True)
 AFK_PAUSE_ON_EMPTY = _env_bool("AFK_PAUSE_ON_EMPTY", True)
+VOICE_IDLE_STATUS = os.getenv("VOICE_IDLE_STATUS", "PAUSED")
 
 # ---------------------------------------------------------------------------
 # Embed header image (optional)
