@@ -9,9 +9,10 @@ from pathlib import Path
 
 import discord
 from discord.ext import commands
-from mutagen import File as MutagenFile, MutagenError # type: ignore
+from mutagen import File as MutagenFile  # type: ignore
+from mutagen import MutagenError
 from mutagen.flac import FLAC
-from mutagen.id3 import APIC, ID3 # type: ignore
+from mutagen.id3 import APIC, ID3  # type: ignore
 
 import config
 
@@ -870,6 +871,9 @@ class RadioManager:
         # ---- Pause state (prevents auto-resume from undoing manual pause) ----
         self._manual_pause: bool = False
 
+        # ---- AFK-paused state (prevents auto-advance and timer loops) ----
+        self._afk_paused: bool = False
+
         # ---- Multi-folder selection ----
         self.active_folder_name: str | None = None
         self.active_folder_path: str | None = None
@@ -1093,7 +1097,10 @@ class RadioManager:
             except (discord.Forbidden, discord.HTTPException) as exc:
                 log.warning("Could not update voice channel status: %s", exc)
 
-        log.info("Now Playing: %s - %s", song_info["artist"], song_info["title"])
+        if is_paused:
+            log.info("Paused: %s - %s", song_info["artist"], song_info["title"])
+        else:
+            log.info("Now Playing: %s - %s", song_info["artist"], song_info["title"])
 
         if not config.SHOW_NOW_PLAYING:
             await self.delete_current_embed()
@@ -1377,6 +1384,8 @@ class RadioManager:
 
     async def _locked_play_next(self) -> None:
         """Acquire the lock, then call play_next()."""
+        if self._afk_paused:
+            return
         async with self._lock:
             await self.play_next()
 
@@ -1444,6 +1453,7 @@ class RadioManager:
                 # Pause playback
                 if self.voice_client.is_playing():
                     self.voice_client.pause()
+                    self._afk_paused = True
 
                 # Post one final embed showing the paused state
                 channel = await self.get_text_channel()
@@ -1499,6 +1509,7 @@ class RadioManager:
                 ):
                     if (
                         config.AFK_PAUSE_ON_EMPTY
+                        and not self._afk_paused
                         and (
                             self.afk_timer_task is None
                             or self.afk_timer_task.done()
@@ -1517,6 +1528,11 @@ class RadioManager:
                     self.afk_timer_task.cancel()
                     self.afk_timer_task = None
                     log.info("AFK timer cancelled (listener joined)")
+
+                # Clear the AFK-paused guard so playback can resume
+                if self._afk_paused:
+                    self._afk_paused = False
+                    log.info("AFK-paused flag cleared (listener joined)")
 
                 # Auto-resume playback if it was paused and someone joins
                 # (only if the pause was NOT a manual user pause)
@@ -1548,6 +1564,7 @@ class RadioManager:
                         "Listener joined empty channel – rejoining and resuming",
                     )
                     self.is_afk_disconnected = False
+                    self._afk_paused = False
                     await self.start_radio()
 
     # -------------------------------------------------------------------
