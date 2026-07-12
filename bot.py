@@ -25,6 +25,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# discord.py installs its own handler on the 'discord' logger when no handler
+# is configured. Remove it so all library logs flow through the root handler
+# and appear exactly once in the bot's custom format.
+discord_logger = logging.getLogger("discord")
+discord_logger.handlers.clear()
+discord_logger.propagate = True
 log = logging.getLogger("radio-bot")
 
 # ---------------------------------------------------------------------------
@@ -1557,6 +1563,22 @@ class RadioManager:
                         await self.update_now_playing(
                             self.current_song_path, info, art, is_paused=False,
                         )
+                elif (
+                    self.voice_client
+                    and self.voice_client.is_connected()
+                    and not self.voice_client.is_playing()
+                    and not self.voice_client.is_paused()
+                    and not self.is_afk_disconnected
+                    and not self._manual_pause
+                ):
+                    # Gateway resumes can leave the voice client in a zombie
+                    # state: is_connected() is True but the audio stream died.
+                    # Restart playback when a listener joins and we were idle.
+                    log.warning(
+                        "Voice client idle after listener joined – restarting playback"
+                    )
+                    async with self._lock:
+                        await self.play_next()
 
                 # Rejoin if we left due to AFK
                 if self.is_afk_disconnected:
@@ -1942,6 +1964,69 @@ async def on_voice_state_update(
                 radio.afk_timer_task = None
             radio.is_afk_disconnected = False
             await radio.start_radio()
+
+
+@bot.event
+async def on_resumed() -> None:
+    """Called when the gateway session resumes after a brief disconnect.
+
+    A gateway resume does NOT re-run on_ready(). The voice UDP connection
+    can silently die during the outage, leaving voice_client.is_connected()
+    True but with no audio flowing. Re-validate the connection here and
+    restart playback if humans are present.
+    """
+    log.info("Gateway session resumed – checking voice connection health")
+
+    guild = bot.get_guild(config.GUILD_ID)
+    if guild is None:
+        return
+
+    voice_channel = guild.get_channel(config.VOICE_CHANNEL_ID)
+    if voice_channel is None or not isinstance(
+        voice_channel, (discord.VoiceChannel, discord.StageChannel)
+    ):
+        return
+
+    has_humans = any(not m.bot for m in voice_channel.members)
+
+    if radio.voice_client is None or not radio.voice_client.is_connected():
+        if has_humans:
+            log.info("Voice client missing after resume – rejoining channel")
+            await radio.start_radio()
+        else:
+            log.info("Voice client missing after resume – channel empty, staying idle")
+        return
+
+    if radio.is_afk_disconnected:
+        return
+
+    if (
+        not radio.voice_client.is_playing()
+        and not radio.voice_client.is_paused()
+        and not radio._manual_pause
+    ):
+        if has_humans:
+            log.warning(
+                "Voice client idle after resume with listeners present – restarting playback"
+            )
+            radio._afk_paused = False
+            async with radio._lock:
+                await radio.play_next()
+        else:
+            log.info(
+                "Voice client idle after resume but channel empty – marking AFK-paused"
+            )
+            radio._afk_paused = True
+            if radio.current_song_path:
+                info = radio.get_audio_info(radio.current_song_path)
+                art = (
+                    radio.get_album_art(radio.current_song_path)
+                    if config.SHOW_ALBUM_ART
+                    else None
+                )
+                await radio.update_now_playing(
+                    radio.current_song_path, info, art, is_paused=True,
+                )
 
 
 # =======================================================================
