@@ -318,10 +318,7 @@ class VoteView(discord.ui.View):
 class PlayerControlsView(discord.ui.View):
     """Persistent control buttons attached to every Now Playing embed.
 
-    Row 0: [PREV] [NEXT] [PAUSE/PLAY]
-    Row 1: [👍] [👎] [📊 STATS]
-
-    The PAUSE/PLAY button is hidden when 2+ humans are in the channel.
+    Row 0: [PREV] [NEXT] [👍] [👎] [📊 STATS]
     """
 
     def __init__(self, radio: "RadioManager"):
@@ -601,53 +598,12 @@ class PlayerControlsView(discord.ui.View):
         await self._maybe_vote(interaction, "skip", action_name, execute)
 
     # ------------------------------------------------------------------
-    # PAUSE / PLAY button — toggles pause state (solo-listeners only)
-    # ------------------------------------------------------------------
-    @discord.ui.button(
-        label="PAUSE / PLAY",
-        style=discord.ButtonStyle.grey,
-        emoji="⏯️",
-        row=0,
-    )
-    async def pause_play_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button,
-    ) -> None:
-        humans = self._count_humans()
-
-        # Pause is inherently a solo feature — reject with >1 human
-        if humans > 1:
-            await interaction.response.send_message(
-                "⏯️ Pause/Play not available with multiple listeners.",
-                ephemeral=True,
-            )
-            return
-
-        action_name = "Pause" if (
-            self.radio.voice_client
-            and self.radio.voice_client.is_playing()
-        ) else "Resume"
-
-        async def execute(inter: discord.Interaction) -> None:
-            await self.radio.toggle_pause()
-            status = (
-                "⏸️ Paused"
-                if (
-                    self.radio.voice_client
-                    and self.radio.voice_client.is_paused()
-                )
-                else "▶️ Resumed"
-            )
-            await self._reply_autodelete(inter, status)
-
-        await self._maybe_vote(interaction, "pause", action_name, execute)
-
-    # ------------------------------------------------------------------
     # 👍 / 👎 Track rating buttons — one vote per user per track.
     # Clicking the opposite button switches your vote.
     # Clicking the same button again removes your vote entirely.
     # ------------------------------------------------------------------
     @discord.ui.button(
-        label="", style=discord.ButtonStyle.green, emoji="👍", row=1,
+        label="", style=discord.ButtonStyle.green, emoji="👍", row=0,
     )
     async def thumbs_up_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
@@ -676,7 +632,7 @@ class PlayerControlsView(discord.ui.View):
         await self._update_rating_labels(interaction)
 
     @discord.ui.button(
-        label="", style=discord.ButtonStyle.red, emoji="👎", row=1,
+        label="", style=discord.ButtonStyle.red, emoji="👎", row=0,
     )
     async def thumbs_down_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
@@ -709,7 +665,7 @@ class PlayerControlsView(discord.ui.View):
     # Only one stats embed can exist at a time (guarded by stats_message).
     # ------------------------------------------------------------------
     @discord.ui.button(
-        label="STATS", style=discord.ButtonStyle.grey, emoji="📊", row=1,
+        label="STATS", style=discord.ButtonStyle.grey, emoji="📊", row=0,
     )
     async def stats_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
@@ -1231,15 +1187,9 @@ class RadioManager:
                     pass
 
     async def _build_controls_view(self) -> PlayerControlsView:
-        """Build a PlayerControlsView, hiding PAUSE/PLAY when 2+ humans."""
+        """Build a PlayerControlsView with all buttons on one row."""
         view = PlayerControlsView(self)
         self.controls_view = view
-
-        humans = 0
-        if self.voice_client and self.voice_client.channel:
-            humans = sum(
-                1 for m in self.voice_client.channel.members if not m.bot
-            )
 
         # Pre-load the rating button labels from the in-memory sets
         up_count = len(self.rating_up)
@@ -1250,13 +1200,6 @@ class RadioManager:
                     child.label = str(up_count) if up_count > 0 else ""
                 elif child.emoji and str(child.emoji) == "👎":
                     child.label = str(down_count) if down_count > 0 else ""
-
-        # PAUSE/PLAY is a solo-listener feature — hide it with multiple users
-        if humans > 1:
-            for child in list(view.children):
-                if isinstance(child, discord.ui.Button) and getattr(getattr(child, "callback", None), "__name__", "") == "pause_play_button":
-                    view.remove_item(child)
-                    break
 
         return view
 
