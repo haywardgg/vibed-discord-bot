@@ -1193,13 +1193,12 @@ class RadioManager:
 
         # Remove PREV/NEXT buttons if the operator has disabled them
         if not config.SHOW_SKIP_BUTTONS:
-            view.children = [
-                child for child in view.children
-                if not (
+            for child in list(view.children):
+                if (
                     isinstance(child, discord.ui.Button)
                     and child.label in ("PREV", "NEXT")
-                )
-            ]
+                ):
+                    view.remove_item(child)
 
         # Pre-load the rating button labels from the in-memory sets
         up_count = len(self.rating_up)
