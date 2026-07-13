@@ -1187,9 +1187,19 @@ class RadioManager:
                     pass
 
     async def _build_controls_view(self) -> PlayerControlsView:
-        """Build a PlayerControlsView with all buttons on one row."""
+        """Build a PlayerControlsView with the configured buttons."""
         view = PlayerControlsView(self)
         self.controls_view = view
+
+        # Remove PREV/NEXT buttons if the operator has disabled them
+        if not config.SHOW_SKIP_BUTTONS:
+            view.children = [
+                child for child in view.children
+                if not (
+                    isinstance(child, discord.ui.Button)
+                    and child.label in ("PREV", "NEXT")
+                )
+            ]
 
         # Pre-load the rating button labels from the in-memory sets
         up_count = len(self.rating_up)

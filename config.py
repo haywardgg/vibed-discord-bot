@@ -118,6 +118,10 @@ SHOW_UP_NEXT = _env_bool("SHOW_UP_NEXT", True)
 SHOW_NOW_PLAYING = _env_bool("SHOW_NOW_PLAYING", True)
 SHOW_ALBUM_ART = _env_bool("SHOW_ALBUM_ART", True)
 
+# Show/hide the PREV and NEXT buttons on the Now Playing embed.
+# Set to "false" to prevent non-admin users from skipping tracks via buttons.
+SHOW_SKIP_BUTTONS = _env_bool("SHOW_SKIP_BUTTONS", False)
+
 # ---------------------------------------------------------------------------
 # Metadata format — controls how the embed description line is displayed.
 # Supports these placeholders: {artist}  {title}  {album}  {duration}

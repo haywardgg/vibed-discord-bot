@@ -19,8 +19,8 @@ A 24/7 Discord music bot that plays audio files from a local folder as a continu
 | **Old message cleanup** | On startup, deletes the bot's previous messages from the text channel so you don't accumulate stale embeds. |
 | **Optional header banner** | Configure a 1280×720 JPG image and it appears full-width at the top of every Now Playing embed — great for branding. |
 | **Display toggles** | Turn individual Now Playing embed elements on/off via `.env`: artist, album, duration, up next, album art, or the entire embed. Mix and match to keep your chat clean. |
-| **Embed button controls** | The Now Playing embed includes [NEXT] [PREV] and [PAUSE/PLAY] buttons. Click to skip, go back, or pause — no commands needed. |
-| **Democratic voting** | When 2+ people are listening, NEXT/PREV buttons trigger a 10-second vote (≥75% YES required). Solo listeners skip/pause freely with no vote. The PAUSE/PLAY button is hidden when multiple people are in the channel. |
+| **Embed button controls** | The Now Playing embed includes optional [NEXT] [PREV] and [PAUSE/PLAY] buttons. Click to skip, go back, or pause — no commands needed. The PREV/NEXT buttons can be hidden entirely via `.env` for admin-only skipping. |
+| **Democratic voting** | When 2+ people are listening and PREV/NEXT buttons are enabled, those buttons trigger a 10-second vote (≥75% YES required). Solo listeners skip/pause freely with no vote. The PAUSE/PLAY button is hidden when multiple people are in the channel. |
 | **Track history** | The bot remembers the last 50 tracks played. The PREV button pops the most recent track back into the queue. |
 | **Auto-delete chat replies** | All bot confirmation, error, and vote-result messages automatically delete after 20 seconds to keep the channel tidy. |
 | **Admin permission system** | State-changing commands (!skip, !volume, !stop, etc.) are restricted to users with a specific role, the Administrator permission, or everyone (if ADMIN_ROLE_ID=0). |
@@ -213,6 +213,9 @@ SHOW_UP_NEXT=true
 SHOW_NOW_PLAYING=true
 SHOW_ALBUM_ART=true
 
+# Show PREV/NEXT buttons on the embed. Set to "true" to let users skip via buttons.
+SHOW_SKIP_BUTTONS=false
+
 # Metadata format — customise the embed description line.
 # Supports: {artist}  {title}  {album}  {duration}
 METADATA_FORMAT={artist} · {album} · {duration}
@@ -325,6 +328,7 @@ The Now Playing embed shows the song title as its heading, with metadata on a co
 | `SHOW_UP_NEXT` | `true` | Shows the next track in the embed footer |
 | `SHOW_NOW_PLAYING` | `true` | Sends the embed at all — set to `false` to stop bot messages in chat (voice status still updates) |
 | `SHOW_ALBUM_ART` | `true` | Shows the album art thumbnail on the right side of the embed — turning this off skips image extraction entirely for better performance |
+| `SHOW_SKIP_BUTTONS` | `false` | Shows the PREV and NEXT buttons on the embed — set to `true` to let users skip tracks via buttons |
 | `METADATA_FORMAT` | `{artist} · {album} · {duration}` | Controls the embed description line. Supports `{artist}`, `{title}`, `{album}`, `{duration}` placeholders |
 
 **Examples:**
@@ -351,12 +355,12 @@ All toggles default to `true`, so existing users who don't update their `.env` w
 
 ### Button Controls & Voting
 
-The Now Playing embed includes three interactive buttons below the track info:
+The Now Playing embed can include up to three interactive buttons below the track info. PREV and NEXT are controlled by `SHOW_SKIP_BUTTONS` (default `false`); the rating buttons and STATS are always shown.
 
 | Button | Behaviour |
 |--------|-----------|
-| **NEXT** (⏭) | Skips to the next track. |
-| **PREV** (⏮) | Goes back to the previous track (keeps a history of the last 50). |
+| **NEXT** (⏭) | Skips to the next track. Hidden unless `SHOW_SKIP_BUTTONS=true`. |
+| **PREV** (⏮) | Goes back to the previous track (keeps a history of the last 50). Hidden unless `SHOW_SKIP_BUTTONS=true`. |
 | **PAUSE / PLAY** (⏯️) | Toggles between paused and playing. |
 
 #### How Voting Works
