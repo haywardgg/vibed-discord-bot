@@ -830,6 +830,9 @@ class RadioManager:
         # ---- PREV tracking (prevents double-counting play stats) ----
         self._preved: bool = False
 
+        # ---- Suppress after callback during reconnect/stop transitions ----
+        self._suppress_after_callback: bool = False
+
         # ---- Pause state (prevents auto-resume from undoing manual pause) ----
         self._manual_pause: bool = False
 
@@ -1331,6 +1334,10 @@ class RadioManager:
         source = discord.PCMVolumeTransformer(source, volume=self.volume)
 
         def after_playing(error: Exception | None) -> None:
+            if self._suppress_after_callback:
+                # Reconnect/stop transitions explicitly drive the next track;
+                # ignore the callback so we don't race or double-advance.
+                return
             if error:
                 log.error("Playback error: %s", error)
             # Schedule the next track on the asyncio event loop
@@ -1636,12 +1643,29 @@ class RadioManager:
         """Connect to voice and begin streaming."""
         self.is_afk_disconnected = False
 
+        # If we already have a live voice connection, check whether it is
+        # actually healthy. After a voice-level reconnect, is_playing() can
+        # remain True even though the ffmpeg process is dead (zombie state).
+        # We always force a fresh stop -> play so audio reliably resumes.
         if (
             self.voice_client is not None
             and self.voice_client.is_connected()
-            and self.voice_client.is_playing()
+            and (self.voice_client.is_playing() or self.voice_client.is_paused())
         ):
-            log.info("Radio already connected and playing.")
+            log.info("Voice connection present – forcing playback restart")
+            self._suppress_after_callback = True
+            try:
+                self.voice_client.stop()
+                # Brief yield so discord.py can clean up the old source.
+                await asyncio.sleep(0.2)
+            except Exception:
+                log.exception("Error stopping zombie playback during reconnect")
+            finally:
+                self._suppress_after_callback = False
+            async with self._lock:
+                await self.play_next()
+            self._is_connecting = False
+            self._last_reconnect_time = asyncio.get_running_loop().time()
             return
 
         if (
@@ -2261,6 +2285,31 @@ async def _signal_handler(sig: signal.Signals) -> None:
     log.info("Received signal %s", sig.name)
     await shutdown_handler()
     await bot.close()
+
+
+# -----------------------------------------------------------------------
+# Command error handler — surfaces missing commands (e.g. renamed skip)
+# -----------------------------------------------------------------------
+@bot.event
+async def on_command_error(ctx: commands.Context, error: Exception) -> None:
+    """Handle command errors. Ignores CommandNotFound unless the user
+    typed a common command like 'skip', so typos or other bots don't spam.
+    """
+    if isinstance(error, commands.CommandNotFound):
+        invoked = ctx.invoked_with or ""
+        # Only reply for the configured skip alias to help diagnose
+        # .env command-name changes (e.g. COMMAND_SKIP changed to 'next').
+        if invoked.lower() == config.COMMAND_SKIP.lower():
+            await ctx.send(
+                f"❌ The skip command is configured as "
+                f"`{bot.command_prefix}{config.COMMAND_SKIP}` in this bot. "
+                f"Use `{bot.command_prefix}help` to see all commands."
+            )
+        # Otherwise stay silent so unrelated bot prefixes don't produce noise.
+        return
+
+    # Let discord.py log other errors normally.
+    log.warning("Unhandled command error: %s", error)
 
 
 # =======================================================================
