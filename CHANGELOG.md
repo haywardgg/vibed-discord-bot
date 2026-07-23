@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`!stop` no longer breaks the ratings database.** `ratings_db.close()` was previously called inside `stop_radio()`, causing `sqlite3.ProgrammingError` on any DB operation after a `!stop` → `!join` cycle. The DB connection is now kept alive until process shutdown.
+- **Votes that pass no longer crash with `InteractionResponded`.** `_reply_autodelete()` now checks `interaction.response.is_done()` and uses `interaction.followup.send()` when the interaction has already been deferred.
+- **STATS no longer fails on libraries larger than 999 tracks.** `get_all_tracks_stats()` now chunks inserts/queries to stay within SQLite's default variable limit.
+- **STATS button no longer gets permanently stuck.** `_stats_loading` is reset in a `finally` block, so a failure during stats generation cannot disable the button for the rest of the session.
+- **`!volume` now applies instantly** to the currently playing track instead of only taking effect on the next song.
+
+### Changed
+
+- **STATS list is now sorted** by play count (descending), then net rating, then title — instead of following the random shuffle order. Long titles are truncated so the monospace table stays readable and within Discord's embed limits.
+- **Album art is sent from memory** (`io.BytesIO`) instead of a shared temp file, removing a potential race condition between multiple bot instances.
+- **"Unknown Album" is now omitted** from the metadata description when `METADATA_FORMAT` includes `{album}`.
+- **Command errors are friendlier.** `MissingRequiredArgument` and `BadArgument` now produce helpful replies for `!volume` and `!switch` instead of failing silently.
+- **A notice is shown when pressing a control while a vote is already running.** Previously the press was silently deferred.
+
+### Removed
+
+- **`toggle_pause()` and the `_manual_pause` flag.** With no pause button planned, the dead code has been removed; auto-resume now simply checks the AFK/paused state.
+- **`RatingsDB.get_all_stats()` and `config.SHOULD_RESTART`.** These were defined but never used.
+
 ### Added
 
 - **Multi-folder music selection** — Bot owners can now configure multiple music folders (e.g. Rock, Lofi, Classical) with custom display names in `.env` via `MUSIC_FOLDERS_JSON`. Users or admins can switch between them with the new `!folders` and `!switch` commands. Permission is controlled by `FOLDER_SELECTION_PERMISSION` (`admin` or `all`). Can be toggled on/off with `FOLDER_SELECTION_ENABLED`. The active folder name appears in the Now Playing embed footer. When disabled, the bot falls back to the default `MUSIC_FOLDER` — fully backward-compatible. User command messages and bot replies auto-delete after `AUTO_DELETE_TIMEOUT` seconds to keep the chat tidy. ([#PR])

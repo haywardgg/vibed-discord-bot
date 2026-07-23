@@ -78,12 +78,12 @@ RUNNING_AS_SERVICE = _env_bool("RUNNING_AS_SERVICE", False)
 # ---------------------------------------------------------------------------
 # Change any of these to avoid conflicting with other bots on the same server.
 # Each bot instance can have its own set of command names.
-HELP_COMMAND  = os.getenv("HELP_COMMAND",  "help")
-COMMAND_NOW   = os.getenv("COMMAND_NOW",   "now")
-COMMAND_SKIP  = os.getenv("COMMAND_SKIP",  "skip")
+HELP_COMMAND = os.getenv("HELP_COMMAND", "help")
+COMMAND_NOW = os.getenv("COMMAND_NOW", "now")
+COMMAND_SKIP = os.getenv("COMMAND_SKIP", "skip")
 COMMAND_VOLUME = os.getenv("COMMAND_VOLUME", "volume")
-COMMAND_STOP  = os.getenv("COMMAND_STOP",  "stop")
-COMMAND_JOIN  = os.getenv("COMMAND_JOIN",  "join")
+COMMAND_STOP = os.getenv("COMMAND_STOP", "stop")
+COMMAND_JOIN = os.getenv("COMMAND_JOIN", "join")
 COMMAND_REFRESH = os.getenv("COMMAND_REFRESH", "refresh")
 COMMAND_QUEUE = os.getenv("COMMAND_QUEUE", "queue")
 COMMAND_RESUME = os.getenv("COMMAND_RESUME", "resume")
@@ -231,8 +231,6 @@ def _sync_env() -> None:
         )
         return
 
-    global SHOULD_RESTART
-    SHOULD_RESTART = True
     NEW_ENV_KEYS_ADDED = True
     NEW_ENV_KEYS_LIST = sorted(missing.keys())
     log.info(
@@ -241,13 +239,6 @@ def _sync_env() -> None:
         ", ".join(NEW_ENV_KEYS_LIST),
     )
 
-
-# ---------------------------------------------------------------------------
-# Auto-restart flag — set by _sync_env() when new keys were added.
-# The bot checks this in on_ready() and triggers a graceful restart
-# so the service manager (systemd / NSSM) picks up the new values.
-# ---------------------------------------------------------------------------
-SHOULD_RESTART: bool = False
 
 
 # ---------------------------------------------------------------------------

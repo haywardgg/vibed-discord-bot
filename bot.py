@@ -1,5 +1,6 @@
 import asyncio
 import glob
+import io
 import logging
 import os
 import random
@@ -186,17 +187,6 @@ class RatingsDB:
         self._conn.commit()
 
     # -------------------------------------------------------------------
-    # get_all_stats() — only tracks that have been played at least once.
-    # -------------------------------------------------------------------
-    def get_all_stats(self) -> list[tuple[str, int, int, int]]:
-        rows = self._conn.execute(
-            "SELECT track_path, up_count, down_count, play_count "
-            "FROM ratings WHERE play_count > 0 "
-            "ORDER BY play_count DESC"
-        ).fetchall()
-        return [(r[0], r[1], r[2], r[3]) for r in rows]
-
-    # -------------------------------------------------------------------
     # get_all_tracks_stats() — ensures every known track has a ratings
     # row, then fetches all of them in the caller's order (used by
     # STATS to show the current shuffle order).
@@ -204,23 +194,30 @@ class RatingsDB:
     def get_all_tracks_stats(
         self, all_track_paths: list[str],
     ) -> list[tuple[str, int, int, int]]:
-        for path in all_track_paths:
-            self._conn.execute(
+        # SQLite has a default 999 variable limit; chunk inserts to stay safe.
+        chunk_size = 900
+        for i in range(0, len(all_track_paths), chunk_size):
+            chunk = all_track_paths[i:i + chunk_size]
+            self._conn.executemany(
                 "INSERT OR IGNORE INTO ratings (track_path, up_count, down_count) "
                 "VALUES (?, 0, 0)",
-                (path,),
+                [(p,) for p in chunk],
             )
         self._conn.commit()
 
-        placeholders = ",".join("?" for _ in all_track_paths)
-        rows = self._conn.execute(
-            f"SELECT track_path, up_count, down_count, play_count "
-            f"FROM ratings WHERE track_path IN ({placeholders})",
-            all_track_paths,
-        ).fetchall()
+        stats_map: dict[str, tuple[str, int, int, int]] = {}
+        for i in range(0, len(all_track_paths), chunk_size):
+            chunk = all_track_paths[i:i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self._conn.execute(
+                f"SELECT track_path, up_count, down_count, play_count "
+                f"FROM ratings WHERE track_path IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                stats_map[row[0]] = (row[0], row[1], row[2], row[3])
 
         # Preserve caller order (e.g. shuffle order from get_all_music_files)
-        stats_map = {r[0]: (r[0], r[1], r[2], r[3]) for r in rows}
         return [stats_map[path] for path in all_track_paths if path in stats_map]
 
     # -------------------------------------------------------------------
@@ -272,7 +269,7 @@ class VoteView(discord.ui.View):
     ):
         super().__init__(timeout=timeout)
         self.radio = radio
-        self.action = action    # "skip", "prev", "pause"
+        self.action = action    # "skip", "prev"
         self.yes_callback = yes_callback  # called if vote passes
         self.voters: set[int] = set()
         self.yes_count: int = 0
@@ -349,8 +346,11 @@ class PlayerControlsView(discord.ui.View):
         if delete_after is None:
             delete_after = config.AUTO_DELETE_TIMEOUT
         try:
-            await interaction.response.send_message(content)
-            msg = await interaction.original_response()
+            if interaction.response.is_done():
+                msg = await interaction.followup.send(content, wait=True)
+            else:
+                await interaction.response.send_message(content)
+                msg = await interaction.original_response()
             asyncio.create_task(self._delete_after(msg, delete_after))
         except discord.HTTPException:
             pass
@@ -421,7 +421,10 @@ class PlayerControlsView(discord.ui.View):
 
         # Don't stack votes on top of each other
         if self.radio.active_vote is not None:
-            await interaction.response.defer()
+            await interaction.response.send_message(
+                "🗳️ A vote is already in progress — wait for it to finish.",
+                ephemeral=True,
+            )
             return
 
         # Acknowledge button press so Discord doesn't show
@@ -694,60 +697,69 @@ class PlayerControlsView(discord.ui.View):
             self.radio._stats_loading = False
             return
 
-        stats = self.radio.ratings_db.get_all_tracks_stats(all_paths)
+        try:
+            stats = self.radio.ratings_db.get_all_tracks_stats(all_paths)
 
-        # ---- Build the monospace table ----
-        # Step 1: find the longest title so we can left-pad consistently
-        titles: list[str] = []
-        for path, up, down, plays in stats:
-            info = self.radio.get_audio_info(path)
-            titles.append(info['title'])
+            # ---- Build the monospace table ----
+            # Step 1: build title/count rows and sort by popularity/rating
+            rows: list[tuple[str, int, int, int]] = []
+            for path, up, down, plays in stats:
+                info = self.radio.get_audio_info(path)
+                rows.append((info["title"], up, down, plays))
 
-        max_title_len = max(len(t) for t in titles) if titles else 0
+            # Sort: most played first, then by net score, then alphabetically
+            rows.sort(key=lambda r: (-r[3], -(r[1] - r[2]), r[0].lower()))
 
-        # Step 2: build each line with right-aligned numbers
-        all_lines: list[str] = []
-        for i, (path, up, down, plays) in enumerate(stats):
-            title = titles[i]
-            padded = title.ljust(max_title_len + 2)
-            all_lines.append(
-                f"{padded} │ 👍 {str(up).rjust(3)} │ 👎 {str(down).rjust(3)} "
-                f"│ ▶ {str(plays).rjust(3)}"
-            )
+            # Step 2: find the longest title so we can left-pad consistently
+            max_title_len = max(len(r[0]) for r in rows) if rows else 0
+            # Cap title width so a single absurd title doesn't blow out the table
+            max_title_len = min(max_title_len, 42)
 
-        # Step 3: paginate — 25 tracks per embed page
-        per_page = 25
-        pages: list[str] = []
-        for idx in range(0, len(all_lines), per_page):
-            chunk = "\n".join(all_lines[idx:idx + per_page])
-            pages.append(f"```\n{chunk}\n```")
+            # Step 3: build each line with right-aligned numbers
+            all_lines: list[str] = []
+            for title, up, down, plays in rows:
+                display_title = title if len(title) <= max_title_len else title[:max_title_len - 1] + "…"
+                padded = display_title.ljust(max_title_len + 2)
+                all_lines.append(
+                    f"{padded} │ 👍 {str(up).rjust(3)} │ 👎 {str(down).rjust(3)} "
+                    f"│ ▶ {str(plays).rjust(3)}"
+                )
 
-        # Step 4: send page 1, track the message for the "one at a time" guard
-        embed = discord.Embed(
-            title="📊 Full Track List",
-            description=pages[0],
-            color=discord.Color.gold(),
-        )
-        embed.set_footer(
-            text=f"{len(stats)} tracks  •  Page 1/{len(pages)}  •  Auto-deletes in 60s"
-        )
-        self.radio.stats_message = await channel.send(embed=embed)
+            # Step 4: paginate — 25 tracks per embed page
+            per_page = 25
+            pages: list[str] = []
+            for idx in range(0, len(all_lines), per_page):
+                chunk = "\n".join(all_lines[idx:idx + per_page])
+                pages.append(f"```\n{chunk}\n```")
 
-        # Remaining pages as follow-up embeds
-        for page_num, page_desc in enumerate(pages[1:], 2):
-            embed2 = discord.Embed(
-                title="📊 Full Track List (continued)",
-                description=page_desc,
+            # Step 5: send page 1, track the message for the "one at a time" guard
+            embed = discord.Embed(
+                title="📊 Full Track List",
+                description=pages[0],
                 color=discord.Color.gold(),
             )
-            embed2.set_footer(
-                text=f"Page {page_num}/{len(pages)}  •  Auto-deletes in 60s"
+            embed.set_footer(
+                text=f"{len(stats)} tracks  •  Page 1/{len(pages)}  •  Auto-deletes in 60s"
             )
-            await channel.send(embed=embed2, delete_after=60)
+            self.radio.stats_message = await channel.send(embed=embed)
 
-        # Clean up after 1 minute
-        asyncio.create_task(self._delete_after(self.radio.stats_message, 60))
-        asyncio.create_task(self._clear_stats_tracker(60))
+            # Remaining pages as follow-up embeds
+            for page_num, page_desc in enumerate(pages[1:], 2):
+                embed2 = discord.Embed(
+                    title="📊 Full Track List (continued)",
+                    description=page_desc,
+                    color=discord.Color.gold(),
+                )
+                embed2.set_footer(
+                    text=f"Page {page_num}/{len(pages)}  •  Auto-deletes in 60s"
+                )
+                await channel.send(embed=embed2, delete_after=60)
+
+            # Clean up after 1 minute
+            asyncio.create_task(self._delete_after(self.radio.stats_message, 60))
+            asyncio.create_task(self._clear_stats_tracker(60))
+        finally:
+            self.radio._stats_loading = False
 
     async def _clear_stats_tracker(self, delay: int) -> None:
         await asyncio.sleep(delay)
@@ -832,9 +844,6 @@ class RadioManager:
 
         # ---- Suppress after callback during reconnect/stop transitions ----
         self._suppress_after_callback: bool = False
-
-        # ---- Pause state (prevents auto-resume from undoing manual pause) ----
-        self._manual_pause: bool = False
 
         # ---- AFK-paused state (prevents auto-advance and timer loops) ----
         self._afk_paused: bool = False
@@ -1091,14 +1100,19 @@ class RadioManager:
         #   {artist}  {title}  {album}  {duration}
         duration_str = ""
         if song_info.get("duration", 0) > 0:
-            duration_str = self.format_duration(song_info['duration'])
+            duration_str = self.format_duration(song_info["duration"])
+
+        # Replace placeholders, but omit "Unknown Album" for a cleaner look
+        album_str = song_info["album"]
+        if album_str == "Unknown Album":
+            album_str = ""
 
         fmt = config.METADATA_FORMAT
         desc = (
-            fmt.replace("{artist}", song_info['artist'])
-               .replace("{title}", song_info['title'])
-               .replace("{album}", song_info['album'])
-               .replace("{duration}", duration_str)
+            fmt.replace("{artist}", song_info["artist"])
+            .replace("{title}", song_info["title"])
+            .replace("{album}", album_str)
+            .replace("{duration}", duration_str)
         ).strip()
 
         # Remove any " · " spacer artifacts when fields resolve to empty
@@ -1146,8 +1160,6 @@ class RadioManager:
 
         # Attach banner image and/or album art
         files: list[discord.File] = []
-        temp_files: list[Path] = []
-        temp_dir = Path(os.environ.get("TEMP", "/tmp"))
 
         if config.HEADER_IMAGE_PATH:
             header_path = Path(config.HEADER_IMAGE_PATH)
@@ -1160,15 +1172,14 @@ class RadioManager:
                     log.warning("Could not read header image from %s", header_path)
 
         if config.SHOW_ALBUM_ART and artwork_data:
-            temp_art = temp_dir / "radio_bot_album_art.png"
             try:
-                temp_art.write_bytes(artwork_data)
-                temp_files.append(temp_art)
-                art_file = discord.File(str(temp_art), filename="albumart.png")
+                art_file = discord.File(
+                    io.BytesIO(artwork_data), filename="albumart.png"
+                )
                 files.append(art_file)
                 embed.set_thumbnail(url="attachment://albumart.png")
             except Exception:
-                log.exception("Failed to write artwork temp file; skipping thumbnail")
+                log.exception("Failed to attach artwork; skipping thumbnail")
 
         # Build the interactive button view
         view = await self._build_controls_view()
@@ -1182,12 +1193,6 @@ class RadioManager:
             self.current_embed_message = await channel.send(
                 embed=embed, view=view,
             )
-        finally:
-            for tf in temp_files:
-                try:
-                    tf.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
     async def _build_controls_view(self) -> PlayerControlsView:
         """Build a PlayerControlsView with the configured buttons."""
@@ -1307,9 +1312,6 @@ class RadioManager:
         self.current_song = f"{song_info['artist']} - {song_info['title']}"
         self.current_song_art = artwork_data
 
-        # Clear any manual pause flag when a new track starts
-        self._manual_pause = False
-
         # Track the play — skip increment if we came here via PREV
         if not self._preved:
             self.ratings_db.increment_play_count(self.current_song_path)
@@ -1353,43 +1355,6 @@ class RadioManager:
             return
         async with self._lock:
             await self.play_next()
-
-    # -------------------------------------------------------------------
-    # Pause / Resume — toggles the voice client and refreshes the embed
-    # -------------------------------------------------------------------
-
-    async def toggle_pause(self) -> None:
-        if self.voice_client is None:
-            return
-
-        if self.voice_client.is_playing():
-            self.voice_client.pause()
-            self._manual_pause = True
-            log.info("Playback paused")
-            if self.current_song_path:
-                info = self.get_audio_info(self.current_song_path)
-                art = (
-                    self.get_album_art(self.current_song_path)
-                    if config.SHOW_ALBUM_ART
-                    else None
-                )
-                await self.update_now_playing(
-                    self.current_song_path, info, art, is_paused=True,
-                )
-        elif self.voice_client.is_paused():
-            self.voice_client.resume()
-            self._manual_pause = False
-            log.info("Playback resumed")
-            if self.current_song_path:
-                info = self.get_audio_info(self.current_song_path)
-                art = (
-                    self.get_album_art(self.current_song_path)
-                    if config.SHOW_ALBUM_ART
-                    else None
-                )
-                await self.update_now_playing(
-                    self.current_song_path, info, art, is_paused=False,
-                )
 
     # -------------------------------------------------------------------
     # AFK — if the channel is empty for AFK_TIMEOUT_SECONDS, disconnect
@@ -1500,13 +1465,11 @@ class RadioManager:
                     log.info("AFK-paused flag cleared (listener joined)")
 
                 # Auto-resume playback if it was paused and someone joins
-                # (only if the pause was NOT a manual user pause)
                 if (
                     self.voice_client
                     and self.voice_client.is_connected()
                     and self.voice_client.is_paused()
                     and not self.is_afk_disconnected
-                    and not self._manual_pause
                 ):
                     log.info(
                         "Listener joined while paused – auto-resuming playback",
@@ -1528,7 +1491,6 @@ class RadioManager:
                     and not self.voice_client.is_playing()
                     and not self.voice_client.is_paused()
                     and not self.is_afk_disconnected
-                    and not self._manual_pause
                 ):
                     # Gateway resumes can leave the voice client in a zombie
                     # state: is_connected() is True but the audio stream died.
@@ -1734,7 +1696,8 @@ class RadioManager:
             self.voice_client = None
             self.is_afk_disconnected = False
             await self.delete_current_embed()
-        self.ratings_db.close()
+        # NOTE: do not close ratings_db here — it is needed after a manual
+        # !stop/!join cycle. It is closed only in shutdown_handler().
 
 
 # =======================================================================
@@ -1979,7 +1942,6 @@ async def on_resumed() -> None:
     if (
         not radio.voice_client.is_playing()
         and not radio.voice_client.is_paused()
-        and not radio._manual_pause
     ):
         if has_humans:
             log.warning(
@@ -2043,8 +2005,18 @@ async def set_volume(ctx: commands.Context, vol: int) -> None:
 
     old = int(radio.volume * 100)
     radio.volume = vol / 100
+
+    # Apply immediately if a PCMVolumeTransformer source is currently playing
+    current_source = (
+        radio.voice_client.source
+        if radio.voice_client and radio.voice_client.is_playing()
+        else None
+    )
+    if isinstance(current_source, discord.PCMVolumeTransformer):
+        current_source.volume = radio.volume
+
     await ctx.send(
-        f"🔊 Volume changed from {old}% to {vol}% (applies to next song)",
+        f"🔊 Volume changed from {old}% to {vol}%",
     )
     log.info("Volume set to %d%%", vol)
 
@@ -2292,9 +2264,7 @@ async def _signal_handler(sig: signal.Signals) -> None:
 # -----------------------------------------------------------------------
 @bot.event
 async def on_command_error(ctx: commands.Context, error: Exception) -> None:
-    """Handle command errors. Ignores CommandNotFound unless the user
-    typed a common command like 'skip', so typos or other bots don't spam.
-    """
+    """Handle common command errors with friendly user feedback."""
     if isinstance(error, commands.CommandNotFound):
         invoked = ctx.invoked_with or ""
         # Only reply for the configured skip alias to help diagnose
@@ -2306,6 +2276,32 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
                 f"Use `{bot.command_prefix}help` to see all commands."
             )
         # Otherwise stay silent so unrelated bot prefixes don't produce noise.
+        return
+
+    if isinstance(error, commands.MissingRequiredArgument):
+        cmd = error.param.name
+        if ctx.command and ctx.command.name == config.COMMAND_VOLUME:
+            await ctx.send(
+                f"❌ Please specify a volume: "
+                f"`{bot.command_prefix}{config.COMMAND_VOLUME} <0-100>`"
+            )
+        elif ctx.command and ctx.command.name == config.COMMAND_SWITCH:
+            await ctx.send(
+                f"❌ Please specify a folder: "
+                f"`{bot.command_prefix}{config.COMMAND_SWITCH} <folder name>`"
+            )
+        else:
+            await ctx.send(f"❌ Missing required argument: `{cmd}`")
+        return
+
+    if isinstance(error, commands.BadArgument):
+        if ctx.command and ctx.command.name == config.COMMAND_VOLUME:
+            await ctx.send(
+                f"❌ Volume must be a number between 0 and 100. "
+                f"Example: `{bot.command_prefix}{config.COMMAND_VOLUME} 50`"
+            )
+        else:
+            await ctx.send("❌ Invalid argument provided.")
         return
 
     # Let discord.py log other errors normally.
