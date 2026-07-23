@@ -1987,20 +1987,29 @@ async def now_playing_cmd(ctx: commands.Context) -> None:
             color=discord.Color.green(),
         )
         embed.set_footer(text=f"Volume: {int(radio.volume * 100)}%")
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
     else:
-        await ctx.send("❌ Nothing is playing right now.")
+        await ctx.send(
+            "❌ Nothing is playing right now.",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
 
 
 @bot.command(name=config.COMMAND_VOLUME)
 async def set_volume(ctx: commands.Context, vol: int) -> None:
     """Set the playback volume (0-100).  Admin only."""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Admin only command!")
+        await ctx.send(
+            "❌ Admin only command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     if not 0 <= vol <= 100:
-        await ctx.send("❌ Volume must be between 0 and 100!")
+        await ctx.send(
+            "❌ Volume must be between 0 and 100!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     old = int(radio.volume * 100)
@@ -2017,6 +2026,7 @@ async def set_volume(ctx: commands.Context, vol: int) -> None:
 
     await ctx.send(
         f"🔊 Volume changed from {old}% to {vol}%",
+        delete_after=config.AUTO_DELETE_TIMEOUT,
     )
     log.info("Volume set to %d%%", vol)
 
@@ -2025,44 +2035,68 @@ async def set_volume(ctx: commands.Context, vol: int) -> None:
 async def skip(ctx: commands.Context) -> None:
     """Skip the current track.  Admin only."""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Admin only command!")
+        await ctx.send(
+            "❌ Admin only command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     async with radio._lock:
         if radio.voice_client and radio.voice_client.is_playing():
             radio.voice_client.stop()
-            await ctx.send("⏭ Skipped to next song")
+            await ctx.send(
+                "⏭ Skipped to next song",
+                delete_after=config.AUTO_DELETE_TIMEOUT,
+            )
         else:
-            await ctx.send("❌ Nothing playing!")
+            await ctx.send(
+                "❌ Nothing playing!",
+                delete_after=config.AUTO_DELETE_TIMEOUT,
+            )
 
 
 @bot.command(name=config.COMMAND_STOP)
-async def stop_radio(ctx: commands.Context) -> None:
+async def stop_radio_cmd(ctx: commands.Context) -> None:
     """Stop playback and disconnect from voice.  Admin only."""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Admin only command!")
+        await ctx.send(
+            "❌ Admin only command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     await radio.stop_radio()
-    await ctx.send("🛑 Radio stopped")
+    await ctx.send(
+        "🛑 Radio stopped",
+        delete_after=config.AUTO_DELETE_TIMEOUT,
+    )
 
 
 @bot.command(name=config.COMMAND_JOIN)
 async def join_radio(ctx: commands.Context) -> None:
     """Start the radio / rejoin voice channel.  Admin only."""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Admin only command!")
+        await ctx.send(
+            "❌ Admin only command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     await radio.start_radio()
-    await ctx.send("📻 Radio started!")
+    await ctx.send(
+        "📻 Radio started!",
+        delete_after=config.AUTO_DELETE_TIMEOUT,
+    )
 
 
 @bot.command(name=config.COMMAND_REFRESH)
 async def refresh_embed(ctx: commands.Context) -> None:
     """Re-send the Now Playing embed.  Admin only."""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Admin only command!")
+        await ctx.send(
+            "❌ Admin only command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     if radio.current_song_path:
@@ -2072,20 +2106,32 @@ async def refresh_embed(ctx: commands.Context) -> None:
             radio.current_song_path, info, art,
             is_paused=radio.is_afk_disconnected,
         )
-        await ctx.send("🔄 Refreshed display")
+        await ctx.send(
+            "🔄 Refreshed display",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
     else:
-        await ctx.send("❌ No song playing")
+        await ctx.send(
+            "❌ No song playing",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
 
 
 @bot.command(name=config.COMMAND_QUEUE)
 async def show_queue(ctx: commands.Context) -> None:
     """Show the next 10 upcoming tracks.  Admin only."""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Admin only command!")
+        await ctx.send(
+            "❌ Admin only command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     if not radio.music_queue:
-        await ctx.send("📋 Queue is empty, refilling...")
+        await ctx.send(
+            "📋 Queue is empty, refilling...",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     lines: list[str] = []
@@ -2102,26 +2148,38 @@ async def show_queue(ctx: commands.Context) -> None:
         description=text,
         color=discord.Color.blue(),
     )
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
 
 
 @bot.command(name=config.COMMAND_RESUME)
 async def resume_radio(ctx: commands.Context) -> None:
     """Rejoin the voice channel and resume playback.  Admin only."""
     if not is_admin(ctx.author):
-        await ctx.send("❌ Admin only command!")
+        await ctx.send(
+            "❌ Admin only command!",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
         return
 
     if radio.is_afk_disconnected:
         log.info("Manual resume – rejoining voice channel")
         radio.is_afk_disconnected = False
         await radio.start_radio()
-        await ctx.send("▶️ Playback resumed")
+        await ctx.send(
+            "▶️ Playback resumed",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
     elif radio.voice_client and radio.voice_client.is_connected():
-        await ctx.send("✅ Bot is already connected to voice")
+        await ctx.send(
+            "✅ Bot is already connected to voice",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
     else:
         await radio.start_radio()
-        await ctx.send("▶️ Playback resumed")
+        await ctx.send(
+            "▶️ Playback resumed",
+            delete_after=config.AUTO_DELETE_TIMEOUT,
+        )
 
 
 # -----------------------------------------------------------------------
@@ -2131,11 +2189,6 @@ async def resume_radio(ctx: commands.Context) -> None:
 @bot.command(name=config.COMMAND_FOLDERS)
 async def list_folders(ctx: commands.Context) -> None:
     """List all configured music folders and show the currently active one."""
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-        pass
-
     if not can_switch_folder(ctx.author):
         await ctx.send(
             "❌ You don't have permission to use this command!",
@@ -2172,11 +2225,6 @@ async def list_folders(ctx: commands.Context) -> None:
 @bot.command(name=config.COMMAND_SWITCH)
 async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -> None:
     """Switch to a different music folder. Provide the folder display name."""
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-        pass
-
     if not can_switch_folder(ctx.author):
         await ctx.send(
             "❌ You don't have permission to use this command!",
@@ -2194,6 +2242,23 @@ async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -
 
     result = await radio.switch_folder(folder_name)
     await ctx.send(result, delete_after=config.AUTO_DELETE_TIMEOUT)
+
+
+# -----------------------------------------------------------------------
+# Global command cleanup — delete both the user's command and the bot
+# reply after AUTO_DELETE_TIMEOUT seconds.
+# -----------------------------------------------------------------------
+@bot.event
+async def on_command(ctx: commands.Context) -> None:
+    """Schedule deletion of the user's command message."""
+    async def _delete_command_later() -> None:
+        await asyncio.sleep(config.AUTO_DELETE_TIMEOUT)
+        try:
+            await ctx.message.delete()
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+
+    asyncio.create_task(_delete_command_later())
 
 
 # -----------------------------------------------------------------------
@@ -2227,7 +2292,7 @@ async def custom_help(ctx: commands.Context) -> None:
         color=discord.Color.blue(),
     )
     embed.set_footer(text="Prefix: !  •  Customise command names in .env")
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
 
 
 # =======================================================================
