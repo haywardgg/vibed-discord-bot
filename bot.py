@@ -1423,7 +1423,13 @@ class RadioManager:
             if guild is None:
                 continue
 
-            voice_channel = guild.get_channel(config.VOICE_CHANNEL_ID)
+            # Use the bot's actual voice channel, falling back to the
+            # configured channel only if we don't have a client yet.
+            if self.voice_client and self.voice_client.channel:
+                voice_channel = self.voice_client.channel
+            else:
+                voice_channel = guild.get_channel(config.VOICE_CHANNEL_ID)
+
             if voice_channel is None:
                 continue
             if not isinstance(voice_channel, (discord.VoiceChannel, discord.StageChannel)):
@@ -1605,6 +1611,14 @@ class RadioManager:
         """Connect to voice and begin streaming."""
         self.is_afk_disconnected = False
 
+        # (Re)start the channel-activity monitor regardless of whether we're
+        # already connected.  This ensures early-return paths (e.g. after a
+        # gateway resume or a reconnect that finds the voice client still
+        # alive) still run the AFK/auto-resume polling loop.
+        if self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+        self._monitor_task = asyncio.create_task(self.check_channel_activity())
+
         # If we already have a live voice connection, check whether it is
         # actually healthy. After a voice-level reconnect, is_playing() can
         # remain True even though the ffmpeg process is dead (zombie state).
@@ -1674,10 +1688,6 @@ class RadioManager:
             log.exception("Unexpected error connecting to voice channel: %s", exc)
             self._is_connecting = False
             return
-
-        if self._monitor_task and not self._monitor_task.done():
-            self._monitor_task.cancel()
-        self._monitor_task = asyncio.create_task(self.check_channel_activity())
 
         async with self._lock:
             await self.play_next()
@@ -2301,6 +2311,11 @@ async def custom_help(ctx: commands.Context) -> None:
 async def shutdown_handler() -> None:
     log.info("Shutdown signal received – disconnecting voice and cancelling tasks")
     await radio.stop_radio()
+    try:
+        radio.ratings_db.close()
+        log.info("Ratings database closed cleanly")
+    except Exception:
+        log.exception("Error closing ratings database during shutdown")
 
 
 def _install_signal_handlers() -> None:
