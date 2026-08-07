@@ -74,21 +74,7 @@ ADMIN_USER_ID = _env_int("ADMIN_USER_ID", 0)
 RUNNING_AS_SERVICE = _env_bool("RUNNING_AS_SERVICE", False)
 
 # ---------------------------------------------------------------------------
-# Custom command names (optional)
-# ---------------------------------------------------------------------------
-# Change any of these to avoid conflicting with other bots on the same server.
-# Each bot instance can have its own set of command names.
-HELP_COMMAND = os.getenv("HELP_COMMAND", "help")
-COMMAND_NOW = os.getenv("COMMAND_NOW", "now")
-COMMAND_SKIP = os.getenv("COMMAND_SKIP", "skip")
-COMMAND_VOLUME = os.getenv("COMMAND_VOLUME", "volume")
-COMMAND_STOP = os.getenv("COMMAND_STOP", "stop")
-COMMAND_JOIN = os.getenv("COMMAND_JOIN", "join")
-COMMAND_REFRESH = os.getenv("COMMAND_REFRESH", "refresh")
-COMMAND_QUEUE = os.getenv("COMMAND_QUEUE", "queue")
-COMMAND_RESUME = os.getenv("COMMAND_RESUME", "resume")
 
-# ---------------------------------------------------------------------------
 # Music settings
 # ---------------------------------------------------------------------------
 # Path to the folder containing your audio files.
@@ -151,11 +137,8 @@ FOLDER_SELECTION_ENABLED = _env_bool("FOLDER_SELECTION_ENABLED", False)
 # Who can use !folders and !switch: "all" (anyone) or "admin" (admins only).
 FOLDER_SELECTION_PERMISSION = os.getenv("FOLDER_SELECTION_PERMISSION", "admin")
 
-# Configurable command names for folder switching
-COMMAND_FOLDERS = os.getenv("COMMAND_FOLDERS", "folders")
-COMMAND_SWITCH = os.getenv("COMMAND_SWITCH", "switch")
-
 # Parse the JSON mapping — robust parsing with graceful fallback
+
 _raw_folders = os.getenv("MUSIC_FOLDERS_JSON", "{}")
 MUSIC_FOLDERS: dict[str, str] = {}
 try:

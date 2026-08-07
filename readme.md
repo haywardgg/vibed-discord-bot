@@ -28,19 +28,19 @@ A 24/7 Discord music bot that plays audio files from a local folder as a continu
 
 ### Commands
 
-| Command (default) | Who Can Use | What It Does | Customisable Via |
-|-------------------|------------|--------------|-----------------|
-| `!help` | Everyone | Shows the help message listing all commands | `HELP_COMMAND` |
-| `!now` | Everyone | Shows the currently playing song and volume | `COMMAND_NOW` |
-| `!volume <0-100>` | Admin | Sets playback volume (applies to next song) | `COMMAND_VOLUME` |
-| `!skip` | Admin | Skips to the next track | `COMMAND_SKIP` |
-| `!stop` | Admin | Stops playback and disconnects from voice | `COMMAND_STOP` |
-| `!join` | Admin | Connects to voice and starts the radio | `COMMAND_JOIN` |
-| `!refresh` | Admin | Re-sends the Now Playing embed | `COMMAND_REFRESH` |
-| `!queue` | Admin | Shows the next 10 upcoming tracks | `COMMAND_QUEUE` |
-| `!resume` | Admin | Rejoins the voice channel and resumes playback. Useful for starting the music before anyone else joins. | `COMMAND_RESUME` |
-| `!folders` | Admin\* | Lists all configured music folders with the currently active one highlighted. | `COMMAND_FOLDERS` |
-| `!switch <name>` | Admin\* | Switches playback to the named music folder. Supports partial name matching. | `COMMAND_SWITCH` |
+| Command | Who Can Use | What It Does |
+|---------|------------|--------------|
+| `!help` | Everyone | Shows the help message listing all commands |
+| `!now` | Everyone | Shows the currently playing song and volume |
+| `!volume <0-100>` | Admin | Sets playback volume (applies to next song) |
+| `!skip` | Admin | Skips to the next track |
+| `!stop` | Admin | Stops playback and disconnects from voice |
+| `!join` | Admin | Connects to voice and starts the radio |
+| `!refresh` | Admin | Re-sends the Now Playing embed |
+| `!queue` | Admin | Shows the next 10 upcoming tracks |
+| `!resume` | Admin | Rejoins the voice channel and resumes playback. Useful for starting the music before anyone else joins. |
+| `!folders` | Admin\* | Lists all configured music folders with the currently active one highlighted. |
+| `!switch <name>` | Admin\* | Switches playback to the named music folder. Supports partial name matching. |
 
 > \* When `FOLDER_SELECTION_ENABLED=true`, permission is controlled by `FOLDER_SELECTION_PERMISSION` — set to `all` to let anyone switch folders, or `admin` (default) to restrict to admins. These commands only appear in `!help` when the feature is enabled.
 
@@ -409,10 +409,6 @@ FOLDER_SELECTION_PERMISSION=admin
 
 # JSON mapping of display name → folder path
 MUSIC_FOLDERS_JSON={"Rock Music": "./music/Rock", "Lofi Beats": "./music/Lofi", "Classical": "./music/Classic"}
-
-# Optional: custom command names (defaults shown)
-COMMAND_FOLDERS=folders
-COMMAND_SWITCH=switch
 ```
 
 Then create the folders and add music:
@@ -449,8 +445,6 @@ Both commands and their responses auto-delete after `AUTO_DELETE_TIMEOUT` second
 | `FOLDER_SELECTION_ENABLED` | `false` | Enable/disable multi-folder selection |
 | `FOLDER_SELECTION_PERMISSION` | `admin` | `admin` or `all` |
 | `MUSIC_FOLDERS_JSON` | `{}` | JSON mapping of names → paths |
-| `COMMAND_FOLDERS` | `folders` | Custom command name for listing folders |
-| `COMMAND_SWITCH` | `switch` | Custom command name for switching folders |
 
 #### Now Playing Embed
 

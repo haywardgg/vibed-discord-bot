@@ -1380,10 +1380,19 @@ class RadioManager:
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     log.warning("Could not update channel status: %s", exc)
 
-                # Pause playback
+                # Stop playback instead of pausing. This kills the underlying
+                # FFmpeg process, freeing resources while the channel is empty.
+                # On resume we will start fresh with a shuffled queue.
                 if self.voice_client.is_playing():
-                    self.voice_client.pause()
                     self._afk_paused = True
+                    self._suppress_after_callback = True
+                    try:
+                        self.voice_client.stop()
+                    finally:
+                        self._suppress_after_callback = False
+                    # Prepare a fresh shuffle for when listeners return.
+                    folder = self._get_current_music_folder()
+                    self.music_queue = self.get_all_music_files(folder)
 
                 # Post one final embed showing the paused state
                 channel = await self.get_text_channel()
@@ -1470,40 +1479,20 @@ class RadioManager:
                     self._afk_paused = False
                     log.info("AFK-paused flag cleared (listener joined)")
 
-                # Auto-resume playback if it was paused and someone joins
+                # Auto-resume playback if we were intentionally stopped
+                # while AFK. Build a fresh shuffled queue and start playing.
                 if (
                     self.voice_client
                     and self.voice_client.is_connected()
-                    and self.voice_client.is_paused()
+                    and not self.voice_client.is_playing()
                     and not self.is_afk_disconnected
                 ):
                     log.info(
-                        "Listener joined while paused – auto-resuming playback",
+                        "Listener joined while AFK-stopped – starting fresh playback",
                     )
-                    self.voice_client.resume()
-                    if self.current_song_path:
-                        info = self.get_audio_info(self.current_song_path)
-                        art = (
-                            self.get_album_art(self.current_song_path)
-                            if config.SHOW_ALBUM_ART
-                            else None
-                        )
-                        await self.update_now_playing(
-                            self.current_song_path, info, art, is_paused=False,
-                        )
-                elif (
-                    self.voice_client
-                    and self.voice_client.is_connected()
-                    and not self.voice_client.is_playing()
-                    and not self.voice_client.is_paused()
-                    and not self.is_afk_disconnected
-                ):
-                    # Gateway resumes can leave the voice client in a zombie
-                    # state: is_connected() is True but the audio stream died.
-                    # Restart playback when a listener joins and we were idle.
-                    log.warning(
-                        "Voice client idle after listener joined – restarting playback"
-                    )
+                    # Prepare a brand new shuffle.
+                    folder = self._get_current_music_folder()
+                    self.music_queue = self.get_all_music_files(folder)
                     async with self._lock:
                         await self.play_next()
 
@@ -1628,6 +1617,20 @@ class RadioManager:
             and self.voice_client.is_connected()
             and (self.voice_client.is_playing() or self.voice_client.is_paused())
         ):
+            # Don't restart if the bot intentionally stopped for AFK and
+            # the channel is still empty. We only want to recover from
+            # zombie states when there are actually listeners present.
+            if self._afk_paused:
+                ch = self.voice_client.channel
+                if ch is None or not any(not m.bot for m in ch.members):
+                    log.info(
+                        "Voice connection present but AFK-stopped and channel empty – "
+                        "staying silent"
+                    )
+                    self._is_connecting = False
+                    self._last_reconnect_time = asyncio.get_running_loop().time()
+                    return
+
             log.info("Voice connection present – forcing playback restart")
             self._suppress_after_callback = True
             try:
@@ -1981,7 +1984,7 @@ async def on_resumed() -> None:
 # Bot Commands
 # =======================================================================
 
-@bot.command(name=config.COMMAND_NOW)
+@bot.command(name="now")
 async def now_playing_cmd(ctx: commands.Context) -> None:
     """Show the currently playing song.  Anyone can use this."""
     if radio.current_song:
@@ -2005,7 +2008,7 @@ async def now_playing_cmd(ctx: commands.Context) -> None:
         )
 
 
-@bot.command(name=config.COMMAND_VOLUME)
+@bot.command(name="volume")
 async def set_volume(ctx: commands.Context, vol: int) -> None:
     """Set the playback volume (0-100).  Admin only."""
     if not is_admin(ctx.author):
@@ -2041,7 +2044,7 @@ async def set_volume(ctx: commands.Context, vol: int) -> None:
     log.info("Volume set to %d%%", vol)
 
 
-@bot.command(name=config.COMMAND_SKIP)
+@bot.command(name="skip")
 async def skip(ctx: commands.Context) -> None:
     """Skip the current track.  Admin only."""
     if not is_admin(ctx.author):
@@ -2065,7 +2068,7 @@ async def skip(ctx: commands.Context) -> None:
             )
 
 
-@bot.command(name=config.COMMAND_STOP)
+@bot.command(name="stop")
 async def stop_radio_cmd(ctx: commands.Context) -> None:
     """Stop playback and disconnect from voice.  Admin only."""
     if not is_admin(ctx.author):
@@ -2082,7 +2085,7 @@ async def stop_radio_cmd(ctx: commands.Context) -> None:
     )
 
 
-@bot.command(name=config.COMMAND_JOIN)
+@bot.command(name="join")
 async def join_radio(ctx: commands.Context) -> None:
     """Start the radio / rejoin voice channel.  Admin only."""
     if not is_admin(ctx.author):
@@ -2099,7 +2102,7 @@ async def join_radio(ctx: commands.Context) -> None:
     )
 
 
-@bot.command(name=config.COMMAND_REFRESH)
+@bot.command(name="refresh")
 async def refresh_embed(ctx: commands.Context) -> None:
     """Re-send the Now Playing embed.  Admin only."""
     if not is_admin(ctx.author):
@@ -2127,7 +2130,7 @@ async def refresh_embed(ctx: commands.Context) -> None:
         )
 
 
-@bot.command(name=config.COMMAND_QUEUE)
+@bot.command(name="queue")
 async def show_queue(ctx: commands.Context) -> None:
     """Show the next 10 upcoming tracks.  Admin only."""
     if not is_admin(ctx.author):
@@ -2161,7 +2164,7 @@ async def show_queue(ctx: commands.Context) -> None:
     await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
 
 
-@bot.command(name=config.COMMAND_RESUME)
+@bot.command(name="resume")
 async def resume_radio(ctx: commands.Context) -> None:
     """Rejoin the voice channel and resume playback.  Admin only."""
     if not is_admin(ctx.author):
@@ -2196,7 +2199,7 @@ async def resume_radio(ctx: commands.Context) -> None:
 # Folder selection commands — only available when FOLDER_SELECTION_ENABLED
 # -----------------------------------------------------------------------
 
-@bot.command(name=config.COMMAND_FOLDERS)
+@bot.command(name="folders")
 async def list_folders(ctx: commands.Context) -> None:
     """List all configured music folders and show the currently active one."""
     if not can_switch_folder(ctx.author):
@@ -2227,12 +2230,12 @@ async def list_folders(ctx: commands.Context) -> None:
         color=discord.Color.blurple(),
     )
     embed.set_footer(
-        text=f"Use {bot.command_prefix}{config.COMMAND_SWITCH} <name> to switch"
+        text=f"Use {bot.command_prefix}{"switch"} <name> to switch"
     )
     await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
 
 
-@bot.command(name=config.COMMAND_SWITCH)
+@bot.command(name="switch")
 async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -> None:
     """Switch to a different music folder. Provide the folder display name."""
     if not can_switch_folder(ctx.author):
@@ -2245,7 +2248,7 @@ async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -
     if not folder_name:
         await ctx.send(
             f"❌ Please specify a folder name. "
-            f"Use `{bot.command_prefix}{config.COMMAND_FOLDERS}` to see available folders.",
+            f"Use `{bot.command_prefix}{"folders"}` to see available folders.",
             delete_after=config.AUTO_DELETE_TIMEOUT,
         )
         return
@@ -2274,34 +2277,34 @@ async def on_command(ctx: commands.Context) -> None:
 # -----------------------------------------------------------------------
 # Custom help command — lists all available commands
 # -----------------------------------------------------------------------
-@bot.command(name=config.HELP_COMMAND)
+@bot.command(name="help")
 async def custom_help(ctx: commands.Context) -> None:
     prefix = bot.command_prefix
     lines = [
-        f"**{prefix}{config.HELP_COMMAND}** — Show this help message (anyone)",
-        f"**{prefix}{config.COMMAND_NOW}** — Show the currently playing song (anyone)",
-        f"**{prefix}{config.COMMAND_VOLUME} <0-100>** — Set playback volume (admin)",
-        f"**{prefix}{config.COMMAND_SKIP}** — Skip to the next track (admin)",
-        f"**{prefix}{config.COMMAND_STOP}** — Stop playback and disconnect (admin)",
-        f"**{prefix}{config.COMMAND_JOIN}** — Start the radio / rejoin voice (admin)",
-        f"**{prefix}{config.COMMAND_REFRESH}** — Re-send the Now Playing embed (admin)",
-        f"**{prefix}{config.COMMAND_QUEUE}** — Show upcoming tracks (admin)",
-        f"**{prefix}{config.COMMAND_RESUME}** — Resume playback after AFK leave (admin)",
+        f"**{prefix}{"help"}** — Show this help message (anyone)",
+        f"**{prefix}{"now"}** — Show the currently playing song (anyone)",
+        f"**{prefix}{"volume"} <0-100>** — Set playback volume (admin)",
+        f"**{prefix}{"skip"}** — Skip to the next track (admin)",
+        f"**{prefix}{"stop"}** — Stop playback and disconnect (admin)",
+        f"**{prefix}{"join"}** — Start the radio / rejoin voice (admin)",
+        f"**{prefix}{"refresh"}** — Re-send the Now Playing embed (admin)",
+        f"**{prefix}{"queue"}** — Show upcoming tracks (admin)",
+        f"**{prefix}{"resume"}** — Resume playback after AFK leave (admin)",
     ]
     if config.FOLDER_SELECTION_ENABLED:
         perm_label = "(anyone)" if config.FOLDER_SELECTION_PERMISSION == "all" else "(admin)"
         lines.append(
-            f"**{prefix}{config.COMMAND_FOLDERS}** — List available music folders {perm_label}"
+            f"**{prefix}{"folders"}** — List available music folders {perm_label}"
         )
         lines.append(
-            f"**{prefix}{config.COMMAND_SWITCH} <name>** — Switch music folder {perm_label}"
+            f"**{prefix}{"switch"} <name>** — Switch music folder {perm_label}"
         )
     embed = discord.Embed(
         title="📻 Vibed Discord Bot — Commands",
         description="\n".join(lines),
         color=discord.Color.blue(),
     )
-    embed.set_footer(text="Prefix: !  •  Customise command names in .env")
+    embed.set_footer(text="Prefix: !")
     await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
 
 
@@ -2347,12 +2350,11 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
     """Handle common command errors with friendly user feedback."""
     if isinstance(error, commands.CommandNotFound):
         invoked = ctx.invoked_with or ""
-        # Only reply for the configured skip alias to help diagnose
-        # .env command-name changes (e.g. COMMAND_SKIP changed to 'next').
-        if invoked.lower() == config.COMMAND_SKIP.lower():
+        # Only reply for the skip alias to help users who expect a "next"
+        # command instead of "skip".
+        if invoked.lower() == "skip".lower():
             await ctx.send(
-                f"❌ The skip command is configured as "
-                f"`{bot.command_prefix}{config.COMMAND_SKIP}` in this bot. "
+                f"❌ The skip command is `!skip` in this bot. "
                 f"Use `{bot.command_prefix}help` to see all commands."
             )
         # Otherwise stay silent so unrelated bot prefixes don't produce noise.
@@ -2360,25 +2362,25 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
 
     if isinstance(error, commands.MissingRequiredArgument):
         cmd = error.param.name
-        if ctx.command and ctx.command.name == config.COMMAND_VOLUME:
+        if ctx.command and ctx.command.name == "volume":
             await ctx.send(
                 f"❌ Please specify a volume: "
-                f"`{bot.command_prefix}{config.COMMAND_VOLUME} <0-100>`"
+                f"`{bot.command_prefix}{"volume"} <0-100>`"
             )
-        elif ctx.command and ctx.command.name == config.COMMAND_SWITCH:
+        elif ctx.command and ctx.command.name == "switch":
             await ctx.send(
                 f"❌ Please specify a folder: "
-                f"`{bot.command_prefix}{config.COMMAND_SWITCH} <folder name>`"
+                f"`{bot.command_prefix}{"switch"} <folder name>`"
             )
         else:
             await ctx.send(f"❌ Missing required argument: `{cmd}`")
         return
 
     if isinstance(error, commands.BadArgument):
-        if ctx.command and ctx.command.name == config.COMMAND_VOLUME:
+        if ctx.command and ctx.command.name == "volume":
             await ctx.send(
                 f"❌ Volume must be a number between 0 and 100. "
-                f"Example: `{bot.command_prefix}{config.COMMAND_VOLUME} 50`"
+                f"Example: `{bot.command_prefix}{"volume"} 50`"
             )
         else:
             await ctx.send("❌ Invalid argument provided.")
