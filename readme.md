@@ -11,19 +11,19 @@ A 24/7 Discord music bot that plays audio files from a local folder as a continu
 | Feature | Details |
 |---------|---------|
 | **Continuous music playback** | Shuffles your music folder and plays forever in a loop. When the queue runs out, it reshuffles all files and keeps going. |
-| **Now Playing embeds** | Sends a rich embed to a text channel showing the current track, artist, album, duration, and album art thumbnail. Shows the next track as "Up Next". |
+| **Now Playing embeds** | Sends a rich embed to the voice channel's text chat showing the current track, artist, album, duration, and album art thumbnail. Shows the next track as "Up Next". |
 | **Voice channel status** | Updates the voice channel's sub-text status to show the current song title (e.g. "🎧 Bohemian Rhapsody"). |
 | **Album art extraction** | Reads embedded artwork from FLAC and MP3 tags. Falls back to `cover.jpg`, `cover.png`, `folder.jpg`, or `albumart.jpg` in the music folder. |
 | **AFK leave & auto-rejoin** | Monitors the voice channel every 5 seconds. If the channel is empty for a configurable timeout (default 60s), sets the channel status to "🎧 DJ waiting.." and **disconnects from voice** to avoid Discord's idle-connection timeout. Rejoins instantly when someone enters. |
-| **Auto-reconnect** | Detects unexpected voice disconnects and retries with exponential backoff (3s → 6s → 12s). Notifies the text channel if all retries fail. Intentional AFK leaves (empty channel) do not trigger reconnection — the bot waits for someone to join instead. |
-| **Old message cleanup** | On startup, deletes the bot's previous messages from the text channel so you don't accumulate stale embeds. |
+| **Auto-reconnect** | Detects unexpected voice disconnects and retries with exponential backoff (3s → 6s → 12s). Notifies the voice channel's text chat if all retries fail. Intentional AFK leaves (empty channel) do not trigger reconnection — the bot waits for someone to join instead. |
+| **Old message cleanup** | On startup, deletes the bot's previous messages from the voice channel's text chat so you don't accumulate stale embeds. |
 | **Optional header banner** | Configure a 1280×720 JPG image and it appears full-width at the top of every Now Playing embed — great for branding. |
 | **Display toggles** | Turn individual Now Playing embed elements on/off via `.env`: artist, album, duration, up next, album art, or the entire embed. Mix and match to keep your chat clean. |
 | **Embed button controls** | The Now Playing embed includes optional [NEXT] [PREV] and [PAUSE/PLAY] buttons. Click to skip, go back, or pause — no commands needed. The PREV/NEXT buttons can be hidden entirely via `.env` for admin-only skipping. |
 | **Democratic voting** | When 2+ people are listening and PREV/NEXT buttons are enabled, those buttons trigger a 10-second vote (≥75% YES required). Solo listeners skip/pause freely with no vote. The PAUSE/PLAY button is hidden when multiple people are in the channel. |
 | **Track history** | The bot remembers the last 50 tracks played. The PREV button pops the most recent track back into the queue. |
 | **Auto-delete chat replies** | All bot confirmation, error, and vote-result messages automatically delete after 20 seconds to keep the channel tidy. |
-| **Admin permission system** | State-changing commands (!skip, !volume, !stop, etc.) are restricted to users with a specific role, the Administrator permission, or everyone (if ADMIN_ROLE_ID=0). |
+| **Admin permission system** | State-changing commands (!skip, !volume, etc.) are restricted to users with a specific role, the Administrator permission, or everyone (if ADMIN_ROLE_ID=0). |
 | **Graceful shutdown** | Handles Ctrl+C and SIGTERM cleanly — disconnects from voice, cancels background tasks, and exits without leaving stale state. |
 
 ### Commands
@@ -34,13 +34,13 @@ A 24/7 Discord music bot that plays audio files from a local folder as a continu
 | `!now` | Everyone | Shows the currently playing song and volume |
 | `!volume <0-100>` | Admin | Sets playback volume (applies to next song) |
 | `!skip` | Admin | Skips to the next track |
-| `!stop` | Admin | Stops playback and disconnects from voice |
-| `!join` | Admin | Connects to voice and starts the radio |
 | `!refresh` | Admin | Re-sends the Now Playing embed |
 | `!queue` | Admin | Shows the next 10 upcoming tracks |
 | `!resume` | Admin | Rejoins the voice channel and resumes playback. Useful for starting the music before anyone else joins. |
 | `!folders` | Admin\* | Lists all configured music folders with the currently active one highlighted. |
 | `!switch <name>` | Admin\* | Switches playback to the named music folder. Supports partial name matching. |
+
+Commands are typed in the voice channel's text chat. Each bot only sees commands in its own voice channel, so running multiple bots on the same server is safe.
 
 > \* When `FOLDER_SELECTION_ENABLED=true`, permission is controlled by `FOLDER_SELECTION_PERMISSION` — set to `all` to let anyone switch folders, or `admin` (default) to restrict to admins. These commands only appear in `!help` when the feature is enabled.
 
@@ -191,7 +191,6 @@ DISCORD_TOKEN=your_bot_token_here
 # Discord IDs — see "Finding Discord IDs" below
 GUILD_ID=1234567890123456789
 VOICE_CHANNEL_ID=1234567890123456789
-TEXT_CHANNEL_ID=1234567890123456789
 
 # Admin role — set to 0 to let everyone use admin commands
 ADMIN_ROLE_ID=0
@@ -238,7 +237,6 @@ AUTO_DELETE_TIMEOUT=20
 |------|--------------|-----|
 | Server | `GUILD_ID` | Right-click server icon → Copy ID |
 | Voice channel | `VOICE_CHANNEL_ID` | Right-click the voice channel → Copy ID |
-| Text channel | `TEXT_CHANNEL_ID` | Right-click the text channel → Copy ID |
 | Admin role | `ADMIN_ROLE_ID` | Server Settings → Roles → right-click role → Copy ID |
 
 ### 6. Add Music Files
@@ -291,11 +289,11 @@ The bot logs every action to stdout. Look for:
 ### 2. Check the Voice Channel Status
 Look at the voice channel in Discord's sidebar. The grey sub-text should show the current song (e.g. "🎧 Bohemian Rhapsody"). When the bot leaves due to an empty channel, the status clears automatically (Discord removes channel statuses when the setter leaves).
 
-### 3. Check the Text Channel
-The bot sends a Now Playing embed to the configured text channel every time a new song starts. If you see it, playback is active.
+### 3. Check the Voice Channel Text Chat
+The bot sends a Now Playing embed to its voice channel's text chat every time a new song starts. If you see it, playback is active.
 
 ### 4. Use the `!now` Command
-Type `!now` in any text channel the bot can see. It replies with the current track or "Nothing is playing right now."
+Type `!now` in the voice channel's text chat. It replies with the current track or "Nothing is playing right now."
 
 ### 5. Test FFmpeg Directly
 If you suspect ffmpeg isn't working, run this while the bot is playing:
@@ -314,7 +312,7 @@ You should see one or more ffmpeg processes if the bot is streaming audio.
 |------------|---------|
 | `GUILD_ID is 0` | You haven't set your server ID in `.env` |
 | `VOICE_CHANNEL_ID is 0` | You haven't set your voice channel ID |
-| `TEXT_CHANNEL_ID is 0` | You haven't set your text channel ID — embeds won't appear |
+| `TEXT_CHANNEL_ID is 0` | (Deprecated — no longer used. The bot posts to the voice channel's text chat.) |
 | `MUSIC_FOLDER '...' does not exist` | Create the folder and add audio files |
 | `MISSING 'Manage Channel' permission` | Voice channel status won't update until fixed — grant **Set Voice Channel Status** (or **Manage Channel**) on the voice channel |
 | `No music files found in ...` | The folder exists but has no supported audio files |
@@ -542,8 +540,8 @@ https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=367001
 | `No music files found` | Check `MUSIC_FOLDER` path. The bot looks for `.mp3`, `.flac`, `.m4a`, `.ogg` — other formats are ignored |
 | Admin commands not working | Set `ADMIN_ROLE_ID=0` in `.env` to open commands to everyone (good for testing) |
 | Voice channel status not updating | Grant the bot the **Set Voice Channel Status** permission (or the broader **Manage Channel** permission) on the voice channel |
-| Old messages not purged on restart | The bot needs **Read Message History** permission on the text channel |
-| Bot disconnected and won't rejoin | Use `!join` to force-reconnect. If the bot was AFK-disconnected (empty channel), it will rejoin automatically when someone enters the voice channel. |
+| Old messages not purged on restart | The bot needs **Read Message History** permission on the voice channel |
+| Bot disconnected and won't rejoin | If the bot was AFK-disconnected (empty channel), it will rejoin automatically when someone enters the voice channel. Otherwise, restart the bot service. |
 | Module import errors (aiohttp, discord, etc.) | Make sure your virtual environment is activated before running `python bot.py` |
 | `DISCORD_TOKEN is not set` | You forgot to create `.env` or the token is missing. Copy `.env.example` to `.env` and fill in your token |
 | Permission errors when installing packages | On Linux, never use `sudo pip`. Make sure you're in a virtual environment |

@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`TEXT_CHANNEL_ID` configuration.** The bot now posts embeds and reads commands directly from the voice channel's text chat, so a separate text channel is no longer needed.
+- **`!join` and `!stop` commands.** The bot auto-joins its configured voice channel on startup and is stopped only by the AFK timeout or service shutdown.
+- **Configurable command names** (`HELP_COMMAND`, `COMMAND_NOW`, `COMMAND_VOLUME`, `COMMAND_SKIP`, `COMMAND_STOP`, `COMMAND_JOIN`, `COMMAND_REFRESH`, `COMMAND_QUEUE`, `COMMAND_RESUME`, `COMMAND_FOLDERS`, `COMMAND_SWITCH`). Commands are now fixed.
 - **`toggle_pause()` and the `_manual_pause` flag.** With no pause button planned, the dead code has been removed; auto-resume now simply checks the AFK/paused state.
 - **`RatingsDB.get_all_stats()` and `config.SHOULD_RESTART`.** These were defined but never used.
 

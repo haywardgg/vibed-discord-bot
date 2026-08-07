@@ -56,7 +56,6 @@ TOKEN = os.getenv("DISCORD_TOKEN")  # Required – must be set in .env
 
 GUILD_ID = _env_int("GUILD_ID", 0)
 VOICE_CHANNEL_ID = _env_int("VOICE_CHANNEL_ID", 0)
-TEXT_CHANNEL_ID = _env_int("TEXT_CHANNEL_ID", 0)
 
 # ---------------------------------------------------------------------------
 # Admin settings
@@ -245,11 +244,6 @@ def _validate_config() -> None:
         log.warning(
             "VOICE_CHANNEL_ID is 0 – the bot cannot join a voice channel. "
             "Set VOICE_CHANNEL_ID in your .env file."
-        )
-    if TEXT_CHANNEL_ID == 0:
-        log.warning(
-            "TEXT_CHANNEL_ID is 0 – Now Playing embeds will not appear. "
-            "Set TEXT_CHANNEL_ID in your .env file."
         )
 
     if MUSIC_FOLDER and not Path(MUSIC_FOLDER).is_dir():

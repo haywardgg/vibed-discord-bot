@@ -357,7 +357,7 @@ class PlayerControlsView(discord.ui.View):
 
     async def _send_autodelete(
         self,
-        channel: discord.TextChannel,
+        channel: discord.TextChannel | discord.VoiceChannel,
         content: str,
         view: discord.ui.View | None = None,
         delete_after: int | None = None,
@@ -1017,18 +1017,32 @@ class RadioManager:
         random.shuffle(music_files)
         return music_files
 
-    async def get_text_channel(self) -> discord.TextChannel | None:
-        """Resolve the configured text channel from guild + channel IDs."""
+    async def get_text_channel(self) -> discord.TextChannel | discord.VoiceChannel | None:
+        """Return the voice channel's text chat for embeds and replies.
+
+        The bot is tied to a single voice channel, so its text channel is
+        that voice channel's associated chat.
+        """
         guild = bot.get_guild(config.GUILD_ID)
         if guild is None:
             log.warning("Guild %s not found", config.GUILD_ID)
             return None
-        channel = guild.get_channel(config.TEXT_CHANNEL_ID)
+
+        # If we are currently connected, use the live voice client's channel.
+        if self.voice_client and self.voice_client.channel:
+            return self.voice_client.channel
+
+        # Otherwise fall back to the configured voice channel.
+        channel = guild.get_channel(config.VOICE_CHANNEL_ID)
         if channel is None:
-            log.warning("Text channel %s not found", config.TEXT_CHANNEL_ID)
-        # Pylance can't statically narrow GuildChannel → TextChannel,
-        # but the configured channel is always a text channel at runtime.
-        return channel  # type: ignore[return-value]
+            log.warning("Voice channel %s not found", config.VOICE_CHANNEL_ID)
+            return None
+        if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+            log.warning(
+                "Channel %s is not a voice-capable channel", config.VOICE_CHANNEL_ID
+            )
+            return None
+        return channel
 
     # -------------------------------------------------------------------
     # Embed management — sends updates to the text channel
@@ -1240,7 +1254,7 @@ class RadioManager:
 
     async def send_autodelete(
         self,
-        channel: discord.TextChannel,
+        channel: discord.TextChannel | discord.VoiceChannel,
         content: str,
         **kwargs,
     ) -> None:
@@ -1709,8 +1723,9 @@ class RadioManager:
             self.voice_client = None
             self.is_afk_disconnected = False
             await self.delete_current_embed()
-        # NOTE: do not close ratings_db here — it is needed after a manual
-        # !stop/!join cycle. It is closed only in shutdown_handler().
+        # NOTE: do not close ratings_db here — it is needed across the bot's
+        # lifetime (e.g. after manual !resume). It is closed only in
+        # shutdown_handler().
 
 
 # =======================================================================
@@ -1897,7 +1912,7 @@ async def on_voice_state_update(
                 if channel:
                     await channel.send(
                         "⚠️ Radio failed to reconnect to voice channel. "
-                        "Admins, use `!join` to manually restart.",
+                        "Restart the bot service to recover.",
                     )
 
     # --- A human joined our voice channel ---
@@ -2068,40 +2083,6 @@ async def skip(ctx: commands.Context) -> None:
             )
 
 
-@bot.command(name="stop")
-async def stop_radio_cmd(ctx: commands.Context) -> None:
-    """Stop playback and disconnect from voice.  Admin only."""
-    if not is_admin(ctx.author):
-        await ctx.send(
-            "❌ Admin only command!",
-            delete_after=config.AUTO_DELETE_TIMEOUT,
-        )
-        return
-
-    await radio.stop_radio()
-    await ctx.send(
-        "🛑 Radio stopped",
-        delete_after=config.AUTO_DELETE_TIMEOUT,
-    )
-
-
-@bot.command(name="join")
-async def join_radio(ctx: commands.Context) -> None:
-    """Start the radio / rejoin voice channel.  Admin only."""
-    if not is_admin(ctx.author):
-        await ctx.send(
-            "❌ Admin only command!",
-            delete_after=config.AUTO_DELETE_TIMEOUT,
-        )
-        return
-
-    await radio.start_radio()
-    await ctx.send(
-        "📻 Radio started!",
-        delete_after=config.AUTO_DELETE_TIMEOUT,
-    )
-
-
 @bot.command(name="refresh")
 async def refresh_embed(ctx: commands.Context) -> None:
     """Re-send the Now Playing embed.  Admin only."""
@@ -2230,7 +2211,7 @@ async def list_folders(ctx: commands.Context) -> None:
         color=discord.Color.blurple(),
     )
     embed.set_footer(
-        text=f"Use {bot.command_prefix}{"switch"} <name> to switch"
+        text=f"Use {bot.command_prefix}switch <name> to switch"
     )
     await ctx.send(embed=embed, delete_after=config.AUTO_DELETE_TIMEOUT)
 
@@ -2248,7 +2229,7 @@ async def switch_music_folder(ctx: commands.Context, *, folder_name: str = "") -
     if not folder_name:
         await ctx.send(
             f"❌ Please specify a folder name. "
-            f"Use `{bot.command_prefix}{"folders"}` to see available folders.",
+            f"Use `{bot.command_prefix}folders` to see available folders.",
             delete_after=config.AUTO_DELETE_TIMEOUT,
         )
         return
@@ -2281,23 +2262,21 @@ async def on_command(ctx: commands.Context) -> None:
 async def custom_help(ctx: commands.Context) -> None:
     prefix = bot.command_prefix
     lines = [
-        f"**{prefix}{"help"}** — Show this help message (anyone)",
-        f"**{prefix}{"now"}** — Show the currently playing song (anyone)",
-        f"**{prefix}{"volume"} <0-100>** — Set playback volume (admin)",
-        f"**{prefix}{"skip"}** — Skip to the next track (admin)",
-        f"**{prefix}{"stop"}** — Stop playback and disconnect (admin)",
-        f"**{prefix}{"join"}** — Start the radio / rejoin voice (admin)",
-        f"**{prefix}{"refresh"}** — Re-send the Now Playing embed (admin)",
-        f"**{prefix}{"queue"}** — Show upcoming tracks (admin)",
-        f"**{prefix}{"resume"}** — Resume playback after AFK leave (admin)",
+        f"**{prefix}help** — Show this help message (anyone)",
+        f"**{prefix}now** — Show the currently playing song (anyone)",
+        f"**{prefix}volume <0-100>** — Set playback volume (admin)",
+        f"**{prefix}skip** — Skip to the next track (admin)",
+        f"**{prefix}refresh** — Re-send the Now Playing embed (admin)",
+        f"**{prefix}queue** — Show upcoming tracks (admin)",
+        f"**{prefix}resume** — Resume playback after AFK leave (admin)",
     ]
     if config.FOLDER_SELECTION_ENABLED:
         perm_label = "(anyone)" if config.FOLDER_SELECTION_PERMISSION == "all" else "(admin)"
         lines.append(
-            f"**{prefix}{"folders"}** — List available music folders {perm_label}"
+            f"**{prefix}folders** — List available music folders {perm_label}"
         )
         lines.append(
-            f"**{prefix}{"switch"} <name>** — Switch music folder {perm_label}"
+            f"**{prefix}switch <name>** — Switch music folder {perm_label}"
         )
     embed = discord.Embed(
         title="📻 Vibed Discord Bot — Commands",
@@ -2365,12 +2344,12 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
         if ctx.command and ctx.command.name == "volume":
             await ctx.send(
                 f"❌ Please specify a volume: "
-                f"`{bot.command_prefix}{"volume"} <0-100>`"
+                f"`{bot.command_prefix}volume <0-100>`"
             )
         elif ctx.command and ctx.command.name == "switch":
             await ctx.send(
                 f"❌ Please specify a folder: "
-                f"`{bot.command_prefix}{"switch"} <folder name>`"
+                f"`{bot.command_prefix}switch <folder name>`"
             )
         else:
             await ctx.send(f"❌ Missing required argument: `{cmd}`")
@@ -2380,7 +2359,7 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
         if ctx.command and ctx.command.name == "volume":
             await ctx.send(
                 f"❌ Volume must be a number between 0 and 100. "
-                f"Example: `{bot.command_prefix}{"volume"} 50`"
+                f"Example: `{bot.command_prefix}volume 50`"
             )
         else:
             await ctx.send("❌ Invalid argument provided.")
