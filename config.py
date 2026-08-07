@@ -122,6 +122,16 @@ VOTE_THRESHOLD = _env_float("VOTE_THRESHOLD", 0.75)
 AUTO_DELETE_TIMEOUT = _env_int("AUTO_DELETE_TIMEOUT", 20)
 
 # ---------------------------------------------------------------------------
+# Startup retry settings
+# ---------------------------------------------------------------------------
+# When Discord returns a 5xx error during login, retry with exponential
+# backoff instead of crashing immediately.  This prevents systemd crash
+# loops during brief Discord outages.
+STARTUP_RETRY_MAX_ATTEMPTS = _env_int("STARTUP_RETRY_MAX_ATTEMPTS", 10)
+STARTUP_RETRY_BASE_SECONDS = _env_float("STARTUP_RETRY_BASE_SECONDS", 2.0)
+STARTUP_RETRY_MAX_SECONDS = _env_float("STARTUP_RETRY_MAX_SECONDS", 300.0)
+
+# ---------------------------------------------------------------------------
 # Multi-folder music selection
 # ---------------------------------------------------------------------------
 # When enabled, the bot owner can configure multiple music folders with

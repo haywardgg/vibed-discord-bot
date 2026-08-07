@@ -2380,9 +2380,52 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
 # =======================================================================
 # Entry point — start the bot with the token from .env
 # =======================================================================
+async def _run_bot_with_retry() -> None:
+    """Start the bot, retrying on transient Discord 5xx login errors."""
+    max_attempts = max(1, config.STARTUP_RETRY_MAX_ATTEMPTS)
+    base_delay = max(0.0, config.STARTUP_RETRY_BASE_SECONDS)
+    max_delay = max(base_delay, config.STARTUP_RETRY_MAX_SECONDS)
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await bot.start(config.TOKEN)
+            return  # clean shutdown
+        except (
+            discord.DiscordServerError,
+            discord.HTTPException,
+            discord.ConnectionClosed,
+        ) as exc:
+            # Transient Discord-side failures.  Retrying is safe.
+            log.warning(
+                "Discord connection failed on startup attempt %d/%d: %s",
+                attempt,
+                max_attempts,
+                exc,
+            )
+            if attempt >= max_attempts:
+                log.error(
+                    "Exceeded maximum startup attempts (%d). Giving up.",
+                    max_attempts,
+                )
+                raise
+
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+            log.info("Retrying bot startup in %.1f seconds...", delay)
+            await asyncio.sleep(delay)
+        except Exception:
+            # Authentication errors, invalid tokens, etc. should not be retried.
+            raise
+
+
 if __name__ == "__main__":
     if not config.TOKEN:
         log.critical("DISCORD_TOKEN is not set – check your .env file")
         raise SystemExit(1)
 
-    bot.run(config.TOKEN)
+    try:
+        asyncio.run(_run_bot_with_retry())
+    except KeyboardInterrupt:
+        log.info("Received keyboard interrupt, shutting down.")
+    except discord.LoginFailure:
+        log.critical("Invalid DISCORD_TOKEN – check your .env file")
+        raise SystemExit(1)
