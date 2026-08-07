@@ -30,7 +30,7 @@ A 24/7 Discord music bot that plays audio files from a local folder as a continu
 
 | Command | Who Can Use | What It Does |
 |---------|------------|--------------|
-| `!help` | Everyone | Shows the help message listing all commands |
+| `!hint` | Everyone | Shows the help message listing all commands |
 | `!now` | Everyone | Shows the currently playing song and volume |
 | `!volume <0-100>` | Admin | Sets playback volume (applies to next song) |
 | `!skip` | Admin | Skips to the next track |
@@ -42,7 +42,7 @@ A 24/7 Discord music bot that plays audio files from a local folder as a continu
 
 Commands are typed in the voice channel's text chat. Each bot only sees commands in its own voice channel, so running multiple bots on the same server is safe.
 
-> \* When `FOLDER_SELECTION_ENABLED=true`, permission is controlled by `FOLDER_SELECTION_PERMISSION` — set to `all` to let anyone switch folders, or `admin` (default) to restrict to admins. These commands only appear in `!help` when the feature is enabled.
+> \* When `FOLDER_SELECTION_ENABLED=true`, permission is controlled by `FOLDER_SELECTION_PERMISSION` — set to `all` to let anyone switch folders, or `admin` (default) to restrict to admins. These commands only appear in `!hint` when the feature is enabled.
 
 ### Supported Audio Formats
 
@@ -292,7 +292,7 @@ Look at the voice channel in Discord's sidebar. The grey sub-text should show th
 ### 3. Check the Voice Channel Text Chat
 The bot sends a Now Playing embed to its voice channel's text chat every time a new song starts. If you see it, playback is active.
 
-### 4. Use the `!now` Command
+### 4. Use the `!hint` or `!now` Command
 Type `!now` in the voice channel's text chat. It replies with the current track or "Nothing is playing right now."
 
 ### 5. Test FFmpeg Directly

@@ -2266,11 +2266,11 @@ async def on_command(ctx: commands.Context) -> None:
 # -----------------------------------------------------------------------
 # Custom help command — lists all available commands
 # -----------------------------------------------------------------------
-@bot.command(name="help")
+@bot.command(name="hint")
 async def custom_help(ctx: commands.Context) -> None:
     prefix = bot.command_prefix
     lines = [
-        f"**{prefix}help** — Show this help message (anyone)",
+        f"**{prefix}hint** — Show this help message (anyone)",
         f"**{prefix}now** — Show the currently playing song (anyone)",
         f"**{prefix}volume <0-100>** — Set playback volume (admin)",
         f"**{prefix}skip** — Skip to the next track (admin)",
@@ -2342,7 +2342,7 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
         if invoked.lower() == "skip".lower():
             await ctx.send(
                 f"❌ The skip command is `!skip` in this bot. "
-                f"Use `{bot.command_prefix}help` to see all commands."
+                f"Use `{bot.command_prefix}hint` to see all commands."
             )
         # Otherwise stay silent so unrelated bot prefixes don't produce noise.
         return

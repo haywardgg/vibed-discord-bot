@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **"Unknown Album" is now omitted** from the metadata description when `METADATA_FORMAT` includes `{album}`.
 - **Command errors are friendlier.** `MissingRequiredArgument` and `BadArgument` now produce helpful replies for `!volume` and `!switch` instead of failing silently.
 - **A notice is shown when pressing a control while a vote is already running.** Previously the press was silently deferred.
-- **All command messages and bot replies now auto-delete** after `AUTO_DELETE_TIMEOUT` seconds (default 20s). A new `on_command` event hook removes the user's command message, and every command reply (including `!help`, `!now`, `!queue`, and error messages) uses `delete_after`.
+- **All command messages and bot replies now auto-delete** after `AUTO_DELETE_TIMEOUT` seconds (default 20s). A new `on_command` event hook removes the user's command message, and every command reply (including `!hint`, `!now`, `!queue`, and error messages) uses `delete_after`.
 
 ### Removed
 
