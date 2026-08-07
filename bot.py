@@ -46,6 +46,14 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 
+# Restrict text commands to the bot's configured voice channel's text chat.
+# Each bot instance only sees commands in its own voice channel, so multiple
+# bots can coexist safely on the same server without responding to each other.
+@bot.check
+async def restrict_commands_to_voice_channel(ctx: commands.Context) -> bool:
+    return ctx.channel.id == config.VOICE_CHANNEL_ID
+
+
 # =======================================================================
 # Ratings Database (SQLite — persists across bot restarts)
 # =======================================================================
