@@ -840,6 +840,16 @@ class RadioManager:
         self._last_reconnect_time: float = 0.0
         self._reconnect_cooldown: float = 10.0
 
+        # ---- Self-heal state ----
+        # A voice session can die on Discord's side while the local client
+        # still reports "connected".  _last_self_heal_time rate-limits the
+        # periodic presence check; _stall_since/_stall_delay track how long
+        # listeners have been waiting for playback that will not start.
+        self._last_self_heal_time: float = 0.0
+        self._self_heal_cooldown: float = 60.0
+        self._stall_since: float | None = None
+        self._stall_delay: float = 60.0
+
         # ---- Voting state ----
         self.active_vote: dict | None = None
 
@@ -1374,7 +1384,20 @@ class RadioManager:
     async def _locked_play_next(self) -> None:
         """Acquire the lock, then call play_next()."""
         if self._afk_paused:
-            return
+            # We only reach this point when a track was started while the bot
+            # was AFK-paused (the reconnection path does that).  Never stall
+            # mutely: if somebody is listening now, clear the stale flag and
+            # carry on; otherwise stay silent and say so.
+            ch = self.voice_client.channel if self.voice_client else None
+            if ch is not None and any(not m.bot for m in ch.members):
+                log.info("Clearing stale AFK-paused flag – listeners present")
+                self._afk_paused = False
+            else:
+                log.info(
+                    "Track ended while AFK-paused and channel empty – "
+                    "staying silent until a listener joins",
+                )
+                return
         async with self._lock:
             await self.play_next()
 
@@ -1445,6 +1468,84 @@ class RadioManager:
                         "AFK_AUTO_LEAVE is false – staying in channel while paused",
                     )
 
+    # -------------------------------------------------------------------
+    # Voice session health — self-healing
+    # -------------------------------------------------------------------
+    # discord.py's voice_client.is_connected() only reflects the LOCAL client.
+    # After a voice-level disconnect it can stay True while Discord no longer
+    # has the bot in the channel at all, and then nothing ever re-joins it:
+    # the bot looks gone from Discord, logs nothing, and only a restart (or a
+    # listener joining) brings it back.  The checks below close that hole.
+    # -------------------------------------------------------------------
+
+    def _gateway_voice_channel_id(self) -> int | None:
+        """Return the voice channel Discord says we are sitting in.
+
+        ``guild.me.voice`` comes straight from the gateway, so unlike
+        ``voice_client.is_connected()`` it is the authoritative answer to
+        "is this bot actually in a voice channel" right now.
+        """
+        guild = bot.get_guild(config.GUILD_ID)
+        if guild is None or guild.me is None:
+            return None
+        state = guild.me.voice
+        if state is None or state.channel is None:
+            return None
+        return state.channel.id
+
+    async def _hard_reconnect(self) -> None:
+        """Throw away the current voice session and establish a new one."""
+        if self._is_connecting:
+            return
+
+        self._is_connecting = True
+        try:
+            stale = self.voice_client
+            self.voice_client = None
+            if stale is not None:
+                try:
+                    # wait_for keeps the polling loop responsive when the old
+                    # session is unresponsive; discord.py still cleans up.
+                    await asyncio.wait_for(stale.disconnect(force=True), timeout=20)
+                except Exception:
+                    log.exception("Error tearing down stale voice client")
+        finally:
+            self._is_connecting = False
+
+        await self.start_radio()
+
+    async def ensure_voice_presence(self) -> bool:
+        """Rejoin voice when Discord and the local client disagree.
+
+        Returns True when a fresh voice connection was started.
+        """
+        if self.is_afk_disconnected or self._is_connecting:
+            return False
+
+        expected = config.VOICE_CHANNEL_ID
+        actual = self._gateway_voice_channel_id()
+        if (
+            actual == expected
+            and self.voice_client is not None
+            and self.voice_client.is_connected()
+        ):
+            return False
+
+        now = asyncio.get_running_loop().time()
+        if now - self._last_self_heal_time < self._self_heal_cooldown:
+            return False
+        self._last_self_heal_time = now
+
+        log.warning(
+            "Voice self-heal: Discord reports us in channel %s but expected %s "
+            "– forcing a fresh voice connection",
+            actual,
+            expected,
+        )
+        self._stall_since = None
+        await self._hard_reconnect()
+        return True
+
     async def check_channel_activity(self) -> None:
         """5-second polling loop that manages AFK timers and auto-resume."""
         while True:
@@ -1454,12 +1555,16 @@ class RadioManager:
             if guild is None:
                 continue
 
-            # Use the bot's actual voice channel, falling back to the
-            # configured channel only if we don't have a client yet.
-            if self.voice_client and self.voice_client.channel:
+            # Self-heal first: if Discord no longer has us sitting in our
+            # channel, rebuild the voice session before anything else.
+            if await self.ensure_voice_presence():
+                continue
+
+            # Prefer the configured channel so listener detection stays
+            # predictable; fall back to the client's channel if it is gone.
+            voice_channel = guild.get_channel(config.VOICE_CHANNEL_ID)
+            if voice_channel is None and self.voice_client is not None:
                 voice_channel = self.voice_client.channel
-            else:
-                voice_channel = guild.get_channel(config.VOICE_CHANNEL_ID)
 
             if voice_channel is None:
                 continue
@@ -1469,6 +1574,8 @@ class RadioManager:
             has_humans = any(not m.bot for m in voice_channel.members)
 
             if not has_humans:
+                self._stall_since = None
+                self._stall_delay = 60.0
                 if (
                     self.voice_client
                     and self.voice_client.is_connected()
@@ -1509,14 +1616,33 @@ class RadioManager:
                     and not self.voice_client.is_playing()
                     and not self.is_afk_disconnected
                 ):
-                    log.info(
-                        "Listener joined while AFK-stopped – starting fresh playback",
-                    )
-                    # Prepare a brand new shuffle.
+                    now = asyncio.get_running_loop().time()
+                    if self._stall_since is None:
+                        self._stall_since = now
+                        log.info(
+                            "Listener joined while AFK-stopped – starting fresh playback",
+                        )
+                    elif now - self._stall_since >= self._stall_delay:
+                        # Listeners are waiting and playback still will not
+                        # start, so the voice session itself is suspect: throw
+                        # it away and build a new one.
+                        log.warning(
+                            "Playback still not running %.0fs after listeners "
+                            "joined – forcing a fresh voice connection",
+                            now - self._stall_since,
+                        )
+                        self._stall_since = now
+                        self._stall_delay = min(self._stall_delay * 2, 600.0)
+                        await self._hard_reconnect()
+                        continue
+                    # Retry the start with a brand new shuffle.
                     folder = self._get_current_music_folder()
                     self.music_queue = self.get_all_music_files(folder)
                     async with self._lock:
                         await self.play_next()
+                else:
+                    self._stall_since = None
+                    self._stall_delay = 60.0
 
                 # Rejoin if we left due to AFK
                 if self.is_afk_disconnected:
@@ -1674,10 +1800,26 @@ class RadioManager:
             and self.voice_client.is_connected()
             and not self.voice_client.is_playing()
         ):
+            # Mirror the zombie-recovery guard above: if we are AFK-paused and
+            # the channel is still empty, stay silent.  Restarting here played
+            # one track into an empty channel and then wedged the queue, since
+            # the AFK-paused flag blocks the next track.
+            if self._afk_paused:
+                ch = self.voice_client.channel
+                if ch is None or not any(not m.bot for m in ch.members):
+                    log.info(
+                        "Voice client idle, AFK-stopped and channel still empty "
+                        "– staying silent"
+                    )
+                    self._is_connecting = False
+                    self._last_reconnect_time = asyncio.get_running_loop().time()
+                    return
+
             log.info("Radio connected but not playing – restarting playback")
             async with self._lock:
                 await self.play_next()
             self._is_connecting = False
+            self._last_reconnect_time = asyncio.get_running_loop().time()
             return
 
         self._is_connecting = True

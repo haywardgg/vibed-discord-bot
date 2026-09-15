@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **STATS no longer fails on libraries larger than 999 tracks.** `get_all_tracks_stats()` now chunks inserts/queries to stay within SQLite's default variable limit.
 - **STATS button no longer gets permanently stuck.** `_stats_loading` is reset in a `finally` block, so a failure during stats generation cannot disable the button for the rest of the session.
 - **`!volume` now applies instantly** to the currently playing track instead of only taking effect on the next song.
+- **The bot can no longer sit outside its voice channel unnoticed.** `voice_client.is_connected()` only reflects the local client, so after a voice-level disconnect it could stay `True` while Discord no longer had the bot in the channel at all — nothing re-joined it and the bot logged nothing, leaving it missing until the service was restarted.
+- **Track transitions no longer stall silently while AFK-paused.** If a track was started while the bot was AFK-paused (the reconnection path does that), `_locked_play_next()` then refused the next track with no log line, leaving the bot silent for hours with an idle queue. It now clears the stale flag when listeners are present, and otherwise logs why it is staying silent.
 
 ### Changed
 
@@ -36,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Voice session self-heal.** The 5-second polling loop now compares Discord's own view of the bot's voice channel (`guild.me.voice`, straight from the gateway) against the local client and rebuilds the voice connection when they disagree (rate-limited to one attempt per minute). This recovers the "bot looks absent from the channel, or connected but silent" state without a service restart.
+- **Playback stall escalation.** If listeners are present and playback still refuses to start, the bot now forces a fresh voice connection after 60 seconds instead of retrying the same dead session forever. Each further escalation doubles the wait, up to 10 minutes, and resets to 60 seconds once playback actually starts.
+- **Reconnect guard extended to the idle-playback path.** `start_radio()` now also stays silent when the bot is AFK-stopped and the channel is still empty in the "connected but not playing" path, not just the zombie-playback path — so a voice gateway hiccup can no longer play one stray track into an empty channel and leave the queue wedged behind the AFK-paused flag.
 - **AFK playback now stops the FFmpeg process** instead of pausing at the voice-gateway level. When the voice channel empties, the bot kills the audio source and shuffles a fresh queue so that listeners get a new random track on rejoin rather than resuming where the previous track left off.
 - **Guard against unwanted auto-resume after reconnects.** `start_radio()` now stays silent when the bot is AFK-stopped and the channel is still empty, preventing the bot from suddenly playing into an empty channel after a voice gateway hiccup.
 - **Multi-folder music selection** — Bot owners can now configure multiple music folders (e.g. Rock, Lofi, Classical) with custom display names in `.env` via `MUSIC_FOLDERS_JSON`. Users or admins can switch between them with the new `!folders` and `!switch` commands. Permission is controlled by `FOLDER_SELECTION_PERMISSION` (`admin` or `all`). Can be toggled on/off with `FOLDER_SELECTION_ENABLED`. The active folder name appears in the Now Playing embed footer. When disabled, the bot falls back to the default `MUSIC_FOLDER` — fully backward-compatible. User command messages and bot replies auto-delete after `AUTO_DELETE_TIMEOUT` seconds to keep the chat tidy. ([#PR])
