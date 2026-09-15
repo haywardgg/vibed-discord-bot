@@ -849,6 +849,22 @@ class RadioManager:
         self._self_heal_cooldown: float = 60.0
         self._stall_since: float | None = None
         self._stall_delay: float = 60.0
+        # Recovery runs as a supervised background task, never awaited from the
+        # 5-second monitor loop: the awaits inside it (voice teardown, channel
+        # purge, voice connect) can hang for minutes on a bad network, and a
+        # frozen loop takes every other self-check down with it.
+        self._recovery_task: asyncio.Task | None = None
+        self._connecting_since: float = 0.0
+        self._connecting_stale_after: float = 120.0
+        # Media liveness: when the current track started and how long it runs,
+        # so a stream that reports "playing" with no audio can be spotted.
+        self._track_started_at: float | None = None
+        self._track_duration: int = 0
+        self._track_overrun_grace: float = 90.0
+        # One periodic state line, so a wedged bot is visible in the journal
+        # instead of silent (a silent journal looks identical to an idle bot).
+        self._last_heartbeat: float = 0.0
+        self._heartbeat_interval: float = 300.0
 
         # ---- Voting state ----
         self.active_vote: dict | None = None
@@ -1381,6 +1397,12 @@ class RadioManager:
 
         self.voice_client.play(source, after=after_playing)
 
+        # Anchor the media-liveness check in check_channel_activity(): a voice
+        # client can report "playing" indefinitely with no audio reaching
+        # Discord, and the expected track length is what exposes it.
+        self._track_started_at = asyncio.get_running_loop().time()
+        self._track_duration = int(song_info.get("duration") or 0)
+
     async def _locked_play_next(self) -> None:
         """Acquire the lock, then call play_next()."""
         if self._afk_paused:
@@ -1493,33 +1515,127 @@ class RadioManager:
             return None
         return state.channel.id
 
-    async def _hard_reconnect(self) -> None:
-        """Throw away the current voice session and establish a new one."""
-        if self._is_connecting:
+    async def _bounded(self, coro, timeout: float, what: str):
+        """Await *coro* with a timeout that cannot block the caller.
+
+        ``asyncio.wait_for`` alone is not enough: when the awaited coroutine
+        swallows cancellation — discord.py's voice teardown does while the
+        network is down — ``wait_for`` keeps waiting for it regardless of its
+        own timeout.  Running it as a task behind a shield makes the timeout
+        fire on schedule and lets the caller carry on; the detached task
+        finishes (or never does) on its own.
+        """
+        task = asyncio.ensure_future(coro)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout)
+        except asyncio.TimeoutError:
+            log.warning(
+                "%s did not finish within %.0fs – carrying on without it",
+                what,
+                timeout,
+            )
+            task.add_done_callback(self._log_detached_failure)
+            return None
+
+    @staticmethod
+    def _log_detached_failure(task: asyncio.Task) -> None:
+        """Report an error from a bounded call we walked away from."""
+        if task.cancelled():
             return
+        exc = task.exception()
+        if exc is not None:
+            log.error(
+                "Abandoned call failed after the caller moved on: %r",
+                exc,
+                exc_info=exc,
+            )
+
+    async def _hard_reconnect(self) -> bool:
+        """Throw away the current voice session and establish a new one.
+
+        Returns False when a recovery is already running.
+        """
+        if self._is_connecting:
+            return False
 
         self._is_connecting = True
+        self._connecting_since = asyncio.get_running_loop().time()
         try:
             stale = self.voice_client
             self.voice_client = None
             if stale is not None:
                 try:
-                    # wait_for keeps the polling loop responsive when the old
-                    # session is unresponsive; discord.py still cleans up.
-                    await asyncio.wait_for(stale.disconnect(force=True), timeout=20)
+                    # Bounded: a teardown that hangs is abandoned, not waited
+                    # on.  discord.py still cleans up its own state.
+                    await self._bounded(
+                        stale.disconnect(force=True),
+                        20,
+                        "Voice teardown",
+                    )
                 except Exception:
                     log.exception("Error tearing down stale voice client")
         finally:
             self._is_connecting = False
 
         await self.start_radio()
+        return True
+
+    def _spawn_recovery(self, reason: str) -> bool:
+        """Start a voice recovery in the background.  Never blocks the caller.
+
+        Recovery is exactly the work that hangs when the network misbehaves,
+        and it is called from the 5-second monitor loop.  Awaiting it there
+        froze the loop — taking the presence check, the AFK handling and the
+        heartbeat down with it — which is how a bot ends up sitting outside its
+        channel, logging nothing, until someone restarts the service.
+        """
+        if self._is_connecting:
+            return False
+        if self._recovery_task is not None and not self._recovery_task.done():
+            return False
+
+        log.warning("Voice recovery started – %s", reason)
+        self._recovery_task = asyncio.create_task(self._hard_reconnect())
+        self._recovery_task.add_done_callback(self._recovery_finished)
+        return True
+
+    @staticmethod
+    def _recovery_finished(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("Voice recovery crashed: %r", exc, exc_info=exc)
+
+    def _clear_stale_connect_flag(self, now: float) -> bool:
+        """Release a connect flag that has been set for far too long.
+
+        The flag is held around work that can hang (voice teardown, HTTP
+        calls, voice connect).  While it is set, every self-check refuses to
+        act — so a single hung await parks the bot outside its channel
+        indefinitely.  Returns True when a stuck flag was cleared.
+        """
+        if not self._is_connecting:
+            return False
+        if now - self._connecting_since <= self._connecting_stale_after:
+            return False
+
+        log.warning(
+            "Connect flag stuck for %.0fs – cancelling the stuck recovery "
+            "and retrying",
+            now - self._connecting_since,
+        )
+        if self._recovery_task is not None and not self._recovery_task.done():
+            self._recovery_task.cancel()
+        self._is_connecting = False
+        return True
 
     async def ensure_voice_presence(self) -> bool:
         """Rejoin voice when Discord and the local client disagree.
 
-        Returns True when a fresh voice connection was started.
+        Returns True when a recovery was started.
         """
-        if self.is_afk_disconnected or self._is_connecting:
+        if self.is_afk_disconnected:
             return False
 
         expected = config.VOICE_CHANNEL_ID
@@ -1531,20 +1647,19 @@ class RadioManager:
         ):
             return False
 
+        if self._is_connecting:
+            # A recovery is already in flight.
+            return False
+
         now = asyncio.get_running_loop().time()
         if now - self._last_self_heal_time < self._self_heal_cooldown:
             return False
         self._last_self_heal_time = now
 
-        log.warning(
-            "Voice self-heal: Discord reports us in channel %s but expected %s "
-            "– forcing a fresh voice connection",
-            actual,
-            expected,
-        )
         self._stall_since = None
-        await self._hard_reconnect()
-        return True
+        return self._spawn_recovery(
+            f"Discord reports us in channel {actual} but expected {expected}",
+        )
 
     async def _monitor_forever(self) -> None:
         """Keep the channel-activity loop alive no matter what happens in it.
@@ -1574,6 +1689,15 @@ class RadioManager:
             if guild is None:
                 continue
 
+            now = asyncio.get_running_loop().time()
+
+            # Never trust _is_connecting indefinitely: it is set around work
+            # that can hang on a dead network, and every self-check here (plus
+            # the voice-state handler) refuses to act while it is set — that is
+            # how the bot ends up parked outside its channel with an idle
+            # queue and a silent journal.
+            self._clear_stale_connect_flag(now)
+
             # Self-heal first: if Discord no longer has us sitting in our
             # channel, rebuild the voice session before anything else.
             if await self.ensure_voice_presence():
@@ -1591,6 +1715,26 @@ class RadioManager:
                 continue
 
             has_humans = any(not m.bot for m in voice_channel.members)
+
+            # One state line every few minutes.  Without it, a bot that has
+            # stopped working looks exactly like a bot with nothing to do —
+            # an empty journal was what hid this class of fault.
+            if now - self._last_heartbeat >= self._heartbeat_interval:
+                self._last_heartbeat = now
+                log.info(
+                    "Heartbeat: gateway_channel=%s expected=%s client=%s "
+                    "playing=%s paused=%s listeners=%d afk_paused=%s "
+                    "connecting=%s queue=%d",
+                    self._gateway_voice_channel_id(),
+                    config.VOICE_CHANNEL_ID,
+                    bool(self.voice_client and self.voice_client.is_connected()),
+                    bool(self.voice_client and self.voice_client.is_playing()),
+                    bool(self.voice_client and self.voice_client.is_paused()),
+                    sum(1 for m in voice_channel.members if not m.bot),
+                    self._afk_paused,
+                    self._is_connecting,
+                    len(self.music_queue),
+                )
 
             if not has_humans:
                 self._stall_since = None
@@ -1627,6 +1771,28 @@ class RadioManager:
                     self._afk_paused = False
                     log.info("AFK-paused flag cleared (listener joined)")
 
+                # Media liveness.  A voice client can report "playing" forever
+                # with no audio reaching Discord (dead UDP path) — the library
+                # does no ack tracking, so nothing raises and every
+                # is_playing()-based guard below is satisfied.  The one thing
+                # that exposes it is the track outliving its own length.
+                if (
+                    self.voice_client
+                    and self.voice_client.is_connected()
+                    and self.voice_client.is_playing()
+                    and self._track_started_at is not None
+                    and self._track_duration > 0
+                    and now - self._track_started_at
+                    > self._track_duration + self._track_overrun_grace
+                ):
+                    overrun = now - self._track_started_at
+                    self._track_started_at = None
+                    self._spawn_recovery(
+                        f"track {self.current_song!r} has reported playing for "
+                        f"{overrun:.0f}s but only runs {self._track_duration}s "
+                        "– the audio path is dead"
+                    )
+
                 # Auto-resume playback if we were intentionally stopped
                 # while AFK. Build a fresh shuffled queue and start playing.
                 if (
@@ -1645,14 +1811,13 @@ class RadioManager:
                         # Listeners are waiting and playback still will not
                         # start, so the voice session itself is suspect: throw
                         # it away and build a new one.
-                        log.warning(
-                            "Playback still not running %.0fs after listeners "
-                            "joined – forcing a fresh voice connection",
-                            now - self._stall_since,
-                        )
+                        stalled_for = now - self._stall_since
                         self._stall_since = now
                         self._stall_delay = min(self._stall_delay * 2, 600.0)
-                        await self._hard_reconnect()
+                        self._spawn_recovery(
+                            f"playback still not running {stalled_for:.0f}s "
+                            "after listeners joined",
+                        )
                         continue
                     # Retry the start with a brand new shuffle.  Decide inside
                     # the lock: the track-change callback holds the same lock
@@ -1846,45 +2011,68 @@ class RadioManager:
             self._last_reconnect_time = asyncio.get_running_loop().time()
             return
 
+        # Everything from here on can hang or raise: the purge is an HTTP call
+        # and the connect reaches out to Discord's voice servers.  The flag
+        # must be released on EVERY exit — an early return that forgets it (or
+        # an await that never returns) disables every self-check in the bot.
         self._is_connecting = True
-        await self._purge_old_bot_messages()
-
-        log.info("Attempting to connect/reconnect to voice channel...")
-        voice_channel = bot.get_channel(config.VOICE_CHANNEL_ID)
-        if voice_channel is None:
-            log.error(
-                "Voice channel %s not found. Check VOICE_CHANNEL_ID in config.",
-                config.VOICE_CHANNEL_ID,
-            )
-            self._is_connecting = False
-            return
-
-        if not isinstance(voice_channel, (discord.VoiceChannel, discord.StageChannel)):
-            log.error(
-                "Channel %s is not a voice-capable channel (type=%s).",
-                config.VOICE_CHANNEL_ID,
-                type(voice_channel).__name__,
-            )
-            self._is_connecting = False
-            return
-
+        self._connecting_since = asyncio.get_running_loop().time()
         try:
-            self.voice_client = await voice_channel.connect()
-            log.info("Connected to voice channel: %s", voice_channel.name)
-        except discord.Forbidden:
-            log.error("Bot cannot join voice channel. Check permissions.")
-            self._is_connecting = False
-            return
-        except (discord.HTTPException, asyncio.TimeoutError) as exc:
-            log.exception("Unexpected error connecting to voice channel: %s", exc)
-            self._is_connecting = False
-            return
+            # Bounded: a page of channel history during a network blip must not
+            # be able to hold the connect path (and the flag) hostage.
+            await self._bounded(
+                self._purge_old_bot_messages(),
+                20,
+                "Voice-channel message purge",
+            )
 
-        async with self._lock:
-            await self.play_next()
+            log.info("Attempting to connect/reconnect to voice channel...")
+            voice_channel = bot.get_channel(config.VOICE_CHANNEL_ID)
+            if voice_channel is None:
+                log.error(
+                    "Voice channel %s not found. Check VOICE_CHANNEL_ID in config.",
+                    config.VOICE_CHANNEL_ID,
+                )
+                return
 
-        self._is_connecting = False
-        self._last_reconnect_time = asyncio.get_running_loop().time()
+            if not isinstance(
+                voice_channel, (discord.VoiceChannel, discord.StageChannel)
+            ):
+                log.error(
+                    "Channel %s is not a voice-capable channel (type=%s).",
+                    config.VOICE_CHANNEL_ID,
+                    type(voice_channel).__name__,
+                )
+                return
+
+            try:
+                self.voice_client = await voice_channel.connect()
+                log.info("Connected to voice channel: %s", voice_channel.name)
+            except discord.Forbidden:
+                log.error("Bot cannot join voice channel. Check permissions.")
+                return
+            except Exception:
+                log.exception("Unexpected error connecting to voice channel")
+                return
+
+            async with self._lock:
+                # Parity with the two guards above: never start a track into an
+                # empty channel just because we reconnected while paused.
+                joined = self.voice_client.channel if self.voice_client else None
+                if (
+                    self._afk_paused
+                    and joined is not None
+                    and not any(not m.bot for m in joined.members)
+                ):
+                    log.info(
+                        "Connected while AFK-stopped and channel empty "
+                        "– staying silent"
+                    )
+                else:
+                    await self.play_next()
+        finally:
+            self._is_connecting = False
+            self._last_reconnect_time = asyncio.get_running_loop().time()
 
     async def stop_radio(self) -> None:
         """Gracefully disconnect and tear down all background tasks."""
