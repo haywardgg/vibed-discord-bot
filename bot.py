@@ -1519,12 +1519,14 @@ class RadioManager:
     async def _bounded(self, coro, timeout: float, what: str):
         """Await *coro* with a timeout that cannot block the caller.
 
-        ``asyncio.wait_for`` alone is not enough: when the awaited coroutine
-        swallows cancellation — discord.py's voice teardown does while the
-        network is down — ``wait_for`` keeps waiting for it regardless of its
-        own timeout.  Running it as a task behind a shield makes the timeout
-        fire on schedule and lets the caller carry on; the detached task
-        finishes (or never does) on its own.
+        ``asyncio.wait_for`` alone is not enough.  The work being awaited here
+        (discord.py's voice teardown awaits a REST call with no deadline of its
+        own, the channel purge an aiohttp request) does not reliably respond to
+        cancellation, and ``wait_for`` waits for a coroutine that ignores it
+        regardless of its own timeout — observed as an 11-minute stall with the
+        monitor loop's only self-check blocked inside it.  Running the coroutine
+        as a task behind a shield makes the timeout fire on schedule and lets
+        the caller carry on; the detached task finishes (or never does) alone.
         """
         task = asyncio.ensure_future(coro)
         try:
