@@ -843,9 +843,10 @@ class RadioManager:
         # ---- Self-heal state ----
         # A voice session can die on Discord's side while the local client
         # still reports "connected".  _last_self_heal_time rate-limits the
-        # periodic presence check; _stall_since/_stall_delay track how long
+        # periodic presence check (-inf so the very first check is not
+        # suppressed by the cooldown); _stall_since/_stall_delay track how long
         # listeners have been waiting for playback that will not start.
-        self._last_self_heal_time: float = 0.0
+        self._last_self_heal_time: float = float("-inf")
         self._self_heal_cooldown: float = 60.0
         self._stall_since: float | None = None
         self._stall_delay: float = 60.0
