@@ -1461,7 +1461,7 @@ class RadioManager:
                     self.voice_client = None
 
                     self._monitor_task = asyncio.create_task(
-                        self.check_channel_activity(),
+                        self._monitor_forever(),
                     )
                 else:
                     log.info(
@@ -1545,6 +1545,25 @@ class RadioManager:
         self._stall_since = None
         await self._hard_reconnect()
         return True
+
+    async def _monitor_forever(self) -> None:
+        """Keep the channel-activity loop alive no matter what happens in it.
+
+        That loop is the bot's only self-management (AFK pause/resume and the
+        voice self-heal above).  If one bad tick killed it, the bot would go on
+        holding a voice channel but stop reacting to anything until the service
+        was restarted, with nothing in the log to say so.
+        """
+        while True:
+            try:
+                await self.check_channel_activity()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Channel-activity loop crashed – restarting it in 5s",
+                )
+                await asyncio.sleep(5)
 
     async def check_channel_activity(self) -> None:
         """5-second polling loop that manages AFK timers and auto-resume."""
@@ -1635,10 +1654,15 @@ class RadioManager:
                         self._stall_delay = min(self._stall_delay * 2, 600.0)
                         await self._hard_reconnect()
                         continue
-                    # Retry the start with a brand new shuffle.
-                    folder = self._get_current_music_folder()
-                    self.music_queue = self.get_all_music_files(folder)
+                    # Retry the start with a brand new shuffle.  Decide inside
+                    # the lock: the track-change callback holds the same lock
+                    # and may have started the next track between our check
+                    # and now (play() raises if audio is already playing).
                     async with self._lock:
+                        if self.voice_client is None or self.voice_client.is_playing():
+                            continue
+                        folder = self._get_current_music_folder()
+                        self.music_queue = self.get_all_music_files(folder)
                         await self.play_next()
                 else:
                     self._stall_since = None
@@ -1754,7 +1778,7 @@ class RadioManager:
         # alive) still run the AFK/auto-resume polling loop.
         if self._monitor_task and not self._monitor_task.done():
             self._monitor_task.cancel()
-        self._monitor_task = asyncio.create_task(self.check_channel_activity())
+        self._monitor_task = asyncio.create_task(self._monitor_forever())
 
         # If we already have a live voice connection, check whether it is
         # actually healthy. After a voice-level reconnect, is_playing() can
